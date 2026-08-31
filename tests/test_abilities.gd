@@ -5,7 +5,7 @@
 extends SceneTree
 
 ## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
-const EXPECTED_CHECKS := 10
+const EXPECTED_CHECKS := 13
 
 var failed_count: int = 0
 var check_count: int = 0
@@ -15,6 +15,7 @@ func _init() -> void:
 	_test_cooldown()
 	_test_attack_speed_scaling()
 	_test_sector_geometry()
+	_test_grapple_targeting()
 
 	if check_count != EXPECTED_CHECKS:
 		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
@@ -59,6 +60,18 @@ func _test_sector_geometry() -> void:
 	var diagonal := Vector2.from_angle(deg_to_rad(45.0)) * 60.0
 	_check(SwordSweep.is_in_sector(origin, aim, diagonal, 90.0, 100.0), "45 度（半角 50 度內）命中")
 	_check(SwordSweep.is_in_sector(origin, aim, Vector2.ZERO, 90.0, 100.0), "原點重疊必中")
+
+
+## 抓鉤選目標：挑最近的隊友、排除自己、範圍外沒目標
+func _test_grapple_targeting() -> void:
+	var players := {
+		1: {"pos": Vector2(100.0, 100.0)},   # 施放者
+		2: {"pos": Vector2(300.0, 100.0)},   # 距離 200
+		3: {"pos": Vector2(150.0, 100.0)},   # 距離 50（最近）
+	}
+	_check(Grapple.find_nearest_ally(players, 1, 600.0) == 3, "挑最近的隊友")
+	_check(Grapple.find_nearest_ally({1: {"pos": Vector2.ZERO}}, 1, 600.0) == -1, "只有自己時沒有目標")
+	_check(Grapple.find_nearest_ally(players, 1, 30.0) == -1, "全部超出範圍時沒有目標")
 
 
 func _check(ok: bool, what: String) -> void:

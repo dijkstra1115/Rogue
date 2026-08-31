@@ -38,5 +38,6 @@ func mark_used(tick: int, attack_speed: float = 1.0) -> void:
 
 ## 執行技能（只在伺服器呼叫）。子類別覆寫。
 ## world = game_world（拿玩家狀態、排入事件）；frame 提供 aim 等輸入。
-func execute(_world: Node2D, _caster_id: int, _frame: InputFrame, _tick: int) -> void:
-	pass
+## 回傳是否成功發動——false 代表沒有有效目標等情況，「不消耗冷卻」。
+func execute(_world: Node2D, _caster_id: int, _frame: InputFrame, _tick: int) -> bool:
+	return false

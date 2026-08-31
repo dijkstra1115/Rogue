@@ -23,7 +23,7 @@ func _init() -> void:
 	scales_with_attack_speed = true
 
 
-func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> void:
+func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> bool:
 	var origin: Vector2 = world.player_states[caster_id].pos
 	# 揮擊事件：伺服器本地呈現＋廣播給所有客戶端畫扇形
 	world.pending_events.append({
@@ -37,6 +37,7 @@ func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> voi
 				Combat.make_damage_event(caster_id, enemy_id, DAMAGE, tick)
 			)
 			world.grant_shield(caster_id, SHIELD_PER_HIT)
+	return true   # 揮空也算發動（進冷卻）
 
 
 ## 扇形命中判定（純幾何，可單獨測試）。

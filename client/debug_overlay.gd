@@ -25,6 +25,7 @@ func _process(_delta: float) -> void:
 	var ids: Array = world.player_states.keys()
 	ids.sort()
 	lines.append("玩家 x%d: %s" % [ids.size(), str(ids)])
+	lines.append("波次: %d   敵人 x%d" % [world.wave_number, world.enemy_states.size()])
 
 	if net.is_server():
 		lines.append("已連線 peers: %s" % str(multiplayer.get_peers()))

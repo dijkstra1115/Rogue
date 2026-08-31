@@ -15,11 +15,14 @@ extends Node2D
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
 
-## 測試用敵人的血量與出生位置（M4 換成吃難度值的生成器）
+## 測試用敵人血量（M4 換成吃難度值的生成器）
 const ENEMY_HP := 30.0
-const ENEMY_SPAWN_POSITIONS: Array[Vector2] = [
-	Vector2(640, 280), Vector2(400, 200), Vector2(880, 200), Vector2(640, 540),
-]
+
+## ---- 波次生成（M2 測試場；M4 換成難度時鐘驅動的生成器）----
+const WAVE_BASE_COUNT := 4        # 第一波隻數
+const WAVE_COUNT_GROWTH := 1      # 每波多幾隻
+const WAVE_BREAK_TICKS := 180     # 清場後多久出下一波（3 秒）
+const WAVE_SPAWN_MARGIN := 70.0   # 出生點離牆的內縮距離
 
 ## 可活動範圍（地板的矩形）。M4 做房間系統時改由房間提供。
 const ARENA_BOUNDS := Rect2(40, 40, 1200, 640)
@@ -78,6 +81,15 @@ var enemy_nodes: Dictionary = {}
 ## 伺服器：敵人流水號
 var next_enemy_id: int = 1
 
+## 目前波次（0 = 尚未開始）。伺服器權威，客戶端由狀態封包同步（疊層顯示用）。
+var wave_number: int = 0
+
+## 下一波的生成 tick（0 = 波次進行中，等清場才排程）
+var next_wave_tick: int = 60
+
+## 波次出生點用的隨機數（固定種子——重現問題時每次跑都一樣）
+var wave_rng := RandomNumberGenerator.new()
+
 
 func _ready() -> void:
 	var net := NetworkManager.instance
@@ -90,9 +102,7 @@ func _ready() -> void:
 		net.peer_left.connect(_on_peer_left)
 		for peer_id in multiplayer.get_peers():
 			_spawn_player(peer_id)
-		# 擺幾隻追擊型敵人（M4 換成吃難度值的生成器）
-		for spawn_pos in ENEMY_SPAWN_POSITIONS:
-			_spawn_enemy("chaser", spawn_pos)
+		wave_rng.seed = hash("rogue-waves")   # 固定種子，重現容易
 	else:
 		# 客戶端：伺服器斷線就回主選單
 		net.server_lost.connect(_on_server_lost)
@@ -157,8 +167,39 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 		state.shield = maxf(0.0, state.shield - PlayerSim.SHIELD_DECAY_PER_TICK)
 
 	_simulate_enemies(tick)
+	_update_waves(tick)
 	_broadcast_state(tick)
 	_flush_events()
+
+
+## 伺服器：清場 → 休息 → 出下一波（隻數隨波次成長）。
+func _update_waves(tick: int) -> void:
+	if player_states.is_empty():
+		return   # 還沒有玩家（例如剛開的專用伺服器）就先不出怪
+	if not enemy_states.is_empty():
+		return
+	if next_wave_tick == 0:
+		# 剛清場：排程下一波
+		next_wave_tick = tick + WAVE_BREAK_TICKS
+	elif tick >= next_wave_tick:
+		wave_number += 1
+		_spawn_wave(wave_number)
+		next_wave_tick = 0
+
+
+## 沿房間四邊隨機出生（離牆內縮，不會卡在牆裡）。
+func _spawn_wave(wave: int) -> void:
+	var count := WAVE_BASE_COUNT + (wave - 1) * WAVE_COUNT_GROWTH
+	var inner := ARENA_BOUNDS.grow(-WAVE_SPAWN_MARGIN)
+	for i in count:
+		var pos: Vector2
+		match i % 4:
+			0: pos = Vector2(wave_rng.randf_range(inner.position.x, inner.end.x), inner.position.y)
+			1: pos = Vector2(wave_rng.randf_range(inner.position.x, inner.end.x), inner.end.y)
+			2: pos = Vector2(inner.position.x, wave_rng.randf_range(inner.position.y, inner.end.y))
+			3: pos = Vector2(inner.end.x, wave_rng.randf_range(inner.position.y, inner.end.y))
+		_spawn_enemy("chaser", pos)
+	print("[world] 第 %d 波：%d 隻" % [wave, count])
 
 
 ## 伺服器：敵人 AI 狀態機——追擊 →（進入距離且冷卻好）前搖 → 結算 → 冷卻追擊。
@@ -241,13 +282,25 @@ func _nearest_player_pos(from_pos: Vector2) -> Vector2:
 
 
 ## 伺服器：依輸入觸發技能（攻擊不做客戶端預測，權威只在這裡）。
+## 執行成功才進冷卻——抓鉤沒抓到人這類失敗不吃冷卻。
 func _process_abilities(peer_id: int, state: Dictionary, frame: InputFrame, tick: int) -> void:
+	if frame.primary:
+		_try_ability(peer_id, state, "primary", frame, tick)
+	if frame.special:
+		_try_ability(peer_id, state, "special", frame, tick)
+
+
+func _try_ability(
+	peer_id: int, state: Dictionary, slot: String, frame: InputFrame, tick: int
+) -> void:
 	var abilities: Dictionary = state.get("abilities", {})
-	if frame.primary and abilities.has("primary"):
-		var ability: Ability = abilities.primary
-		if ability.is_ready(tick):
-			ability.mark_used(tick, state.get("attack_speed", 1.0))
-			ability.execute(self, peer_id, frame, tick)
+	if not abilities.has(slot):
+		return
+	var ability: Ability = abilities[slot]
+	if not ability.is_ready(tick):
+		return
+	if ability.execute(self, peer_id, frame, tick):
+		ability.mark_used(tick, state.get("attack_speed", 1.0))
 
 
 ## 伺服器：把本 tick 的事件廣播出去（本地也立即呈現）。
@@ -282,6 +335,11 @@ func _apply_events(events: Array) -> void:
 				number.position = event.o
 				number.amount = event.n
 				add_child(number)
+			"grapple":
+				var grapple_fx := GrappleFx.new()
+				grapple_fx.from_pos = event.from
+				grapple_fx.to_pos = event.to
+				add_child(grapple_fx)
 			"telegraph":
 				var telegraph := TelegraphFx.new()
 				telegraph.position = event.o
@@ -323,6 +381,7 @@ func _capture_input(tick: int, aim_origin: Vector2) -> InputFrame:
 		frame.aim = frame.move.normalized()
 		frame.primary = tick % 90 < 2    # 偶爾揮劍，讓煙霧測試走到事件管線
 		frame.utility = tick % 150 < 2   # 偶爾衝刺，驗證衝刺預測在延遲下收斂
+		frame.special = tick % 240 < 2   # 偶爾抓鉤（有隊友才會真的發動）
 		return frame
 	return LocalInput.capture(tick, self, aim_origin)
 
@@ -347,7 +406,7 @@ func _broadcast_state(tick: int) -> void:
 		move_snaps[peer_id] = PlayerSim.snapshot_movement(state)
 	var payload := {
 		"t": tick, "p": positions, "a": acks, "e": enemies,
-		"hp": player_hp, "mv": move_snaps,
+		"hp": player_hp, "mv": move_snaps, "w": wave_number,
 	}
 	NetworkManager.instance.send_or_delay(func() -> void: _receive_state.rpc(payload))
 
@@ -397,6 +456,7 @@ func _apply_server_state(state_data: Dictionary) -> void:
 			player_states[peer_id].max_hp = player_hp[peer_id][1]
 			player_states[peer_id].shield = player_hp[peer_id][2]
 
+	wave_number = state_data.get("w", 0)
 	_sync_enemies(state_data.get("e", {}))
 
 
@@ -442,7 +502,10 @@ func _spawn_player(peer_id: int) -> void:
 	PlayerSim.init_movement(player_states[peer_id], node.position)
 	# 技能只存在於伺服器（權威）。目前人人都是劍士；角色選擇是 M6 的事。
 	if NetworkManager.instance.is_server():
-		player_states[peer_id].abilities = {"primary": SwordSweep.new()}
+		player_states[peer_id].abilities = {
+			"primary": SwordSweep.new(),
+			"special": Grapple.new(),   # 隊友向技能（TargetKind.ALLY 的第一個實例）
+		}
 	player_nodes[peer_id] = node
 	# 客戶端為「自己」建立預測器（伺服器端與 host 玩家不需要——他們就是權威）；
 	# 為「別人」建立插值緩衝（伺服器端看到的就是權威位置，不需要）
