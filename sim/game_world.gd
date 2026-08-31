@@ -104,11 +104,13 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 		if frame != null:
 			state.last_input = frame
 			state.ack_tick = frame.tick   # 回報給客戶端：你的輸入我消化到這裡了
-		# 這 tick 沒收到新輸入（封包丟了）就沿用上一筆，角色不會突然定住
-		if state.last_input != null:
 			state.pos = PlayerSim.simulate_movement(
-				state.pos, state.last_input, state.move_speed, ARENA_BOUNDS
+				state.pos, frame, state.move_speed, ARENA_BOUNDS
 			)
+		# 沒收到新輸入：這 tick 凍結這位玩家（不模擬）。
+		# 千萬不要「沿用上一筆再模擬」——那等於同一筆輸入套用兩次，
+		# 客戶端預測永遠對不上，和解修正會無限 +1（實測踩過的雷）。
+		# 每筆輸入兩邊各套用恰好一次、順序相同 → 位置必然收斂。
 
 	_broadcast_state(tick)
 

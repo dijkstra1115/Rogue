@@ -16,6 +16,7 @@ var failed_count: int = 0
 
 func _init() -> void:
 	_test_perfect_network_zero_corrections()
+	_test_server_jitter_zero_corrections()
 	_test_mispredict_replay_converges()
 	_test_pending_pruned_after_ack()
 	_test_visual_error_decays()
@@ -50,6 +51,31 @@ func _test_perfect_network_zero_corrections() -> void:
 	_check(prediction.correction_count == 0, "理想網路下零和解修正")
 	_check(prediction.pending_inputs.is_empty(), "確認過的輸入都被清掉")
 	_check(client_pos.distance_to(server_pos) < 0.01, "客戶端與伺服器位置一致")
+
+
+## 網路抖動重現（實測踩過的雷）：伺服器有些 tick 收不到輸入。
+## 正確行為是「凍結一格、之後照序補吃」，每筆輸入只套用一次——
+## 這樣客戶端預測依然全對，修正次數必須是 0。
+## （如果伺服器改成「沿用上一筆再模擬」，這個測試會炸——那正是 bug。）
+func _test_server_jitter_zero_corrections() -> void:
+	var prediction := ClientPrediction.new()
+	var client_pos := START
+	var server_pos := START
+	var in_flight: Array[InputFrame] = []   # 模擬網路中的輸入佇列
+	var server_ack := -1
+	for tick in range(1, 181):
+		var frame := _make_frame(tick)
+		client_pos = prediction.predict(client_pos, frame, SPEED, BOUNDS)
+		in_flight.append(frame)
+		# 伺服器：每 7 tick「晚到一拍」什麼都收不到；其餘每 tick 照序吃一筆
+		if tick % 7 != 0 and not in_flight.is_empty():
+			var served: InputFrame = in_flight.pop_front()
+			server_pos = PlayerSim.simulate_movement(server_pos, served, SPEED, BOUNDS)
+			server_ack = served.tick
+		# 每 3 tick 回報一次狀態
+		if tick % 3 == 0 and server_ack >= 0:
+			client_pos = prediction.reconcile(client_pos, server_pos, server_ack, SPEED, BOUNDS)
+	_check(prediction.correction_count == 0, "伺服器抖動（凍結補吃）下零和解修正")
 
 
 ## 伺服器回報一個偏掉的位置：要修正一次，且重放後的位置
