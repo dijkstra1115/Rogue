@@ -15,9 +15,9 @@ extends Node2D
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
 const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
 
-## 站樁靶的血量與擺放位置（步驟 3 起改由生成器與 AI 接手）
-const DUMMY_HP := 30.0
-const DUMMY_POSITIONS: Array[Vector2] = [
+## 測試用敵人的血量與出生位置（M4 換成吃難度值的生成器）
+const ENEMY_HP := 30.0
+const ENEMY_SPAWN_POSITIONS: Array[Vector2] = [
 	Vector2(640, 280), Vector2(400, 200), Vector2(880, 200), Vector2(640, 540),
 ]
 
@@ -90,9 +90,9 @@ func _ready() -> void:
 		net.peer_left.connect(_on_peer_left)
 		for peer_id in multiplayer.get_peers():
 			_spawn_player(peer_id)
-		# 步驟 2：先擺幾隻站樁靶練刀（步驟 3 起換成 AI 敵人）
-		for dummy_pos in DUMMY_POSITIONS:
-			_spawn_enemy("dummy", dummy_pos)
+		# 擺幾隻追擊型敵人（M4 換成吃難度值的生成器）
+		for spawn_pos in ENEMY_SPAWN_POSITIONS:
+			_spawn_enemy("chaser", spawn_pos)
 	else:
 		# 客戶端：伺服器斷線就回主選單
 		net.server_lost.connect(_on_server_lost)
@@ -153,8 +153,36 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 			_process_abilities(peer_id, state, frame, tick)
 			applied += 1
 
+	_simulate_enemies(tick)
 	_broadcast_state(tick)
 	_flush_events()
+
+
+## 伺服器：敵人 AI——追最近的玩家，彼此保持距離。
+func _simulate_enemies(_tick: int) -> void:
+	if player_states.is_empty():
+		return
+	for enemy_id: int in enemy_states:
+		var enemy: Dictionary = enemy_states[enemy_id]
+		enemy.pos = EnemySim.simulate_chase(
+			enemy.pos,
+			_nearest_player_pos(enemy.pos),
+			enemy.move_speed,
+			EnemySim.STOP_RANGE,
+			ARENA_BOUNDS
+		)
+	EnemySim.apply_separation(enemy_states, EnemySim.SEPARATION_DIST, ARENA_BOUNDS)
+
+
+func _nearest_player_pos(from_pos: Vector2) -> Vector2:
+	var best_pos := Vector2.ZERO
+	var best_dist := INF
+	for peer_id: int in player_states:
+		var dist: float = player_states[peer_id].pos.distance_squared_to(from_pos)
+		if dist < best_dist:
+			best_dist = dist
+			best_pos = player_states[peer_id].pos
+	return best_pos
 
 
 ## 伺服器：依輸入觸發技能（攻擊不做客戶端預測，權威只在這裡）。
@@ -302,6 +330,8 @@ func _sync_enemies(enemy_data: Dictionary) -> void:
 		enemy.pos = data.p
 		enemy.hp = data.h
 		enemy.max_hp = data.m
+		if enemy.has("interp"):
+			enemy.interp.push_state(last_server_state_tick, data.p)
 	for enemy_id: int in enemy_states.keys():
 		if not enemy_data.has(enemy_id):
 			_despawn_enemy(enemy_id)
@@ -347,8 +377,8 @@ func _spawn_enemy(kind: String, pos: Vector2) -> int:
 	_create_enemy_entry(enemy_id, pos)
 	var enemy: Dictionary = enemy_states[enemy_id]
 	enemy.kind = kind
-	enemy.hp = DUMMY_HP
-	enemy.max_hp = DUMMY_HP
+	enemy.hp = ENEMY_HP
+	enemy.max_hp = ENEMY_HP
 	return enemy_id
 
 
@@ -359,11 +389,15 @@ func _create_enemy_entry(enemy_id: int, pos: Vector2) -> void:
 	add_child(node)
 	enemy_states[enemy_id] = {
 		"pos": pos,
-		"hp": DUMMY_HP,
-		"max_hp": DUMMY_HP,
-		"kind": "dummy",
+		"hp": ENEMY_HP,
+		"max_hp": ENEMY_HP,
+		"kind": "chaser",
+		"move_speed": EnemySim.CHASE_SPEED,   # 屬性放狀態裡，之後可被難度/敵種改寫
 	}
 	enemy_nodes[enemy_id] = node
+	# 客戶端：敵人會動了，渲染走 100ms 延遲插值（和遠端玩家同一套）
+	if not NetworkManager.instance.is_server():
+		enemy_states[enemy_id].interp = RemoteInterpolation.new()
 
 
 func _despawn_enemy(enemy_id: int) -> void:
@@ -441,9 +475,13 @@ func _process(_delta: float) -> void:
 				render_pos += prediction.visual_error
 			node.position = render_pos
 
-	# 敵人：位置與血條（步驟 3 敵人會動之後，客戶端這裡改吃插值）
+	# 敵人：位置與血條。客戶端吃插值（同遠端玩家），伺服器直接抄權威位置。
 	for enemy_id: int in enemy_states:
 		var enemy: Dictionary = enemy_states[enemy_id]
 		var enemy_node: Node2D = enemy_nodes[enemy_id]
-		enemy_node.position = enemy.pos
+		if enemy.has("interp"):
+			var sampled: Variant = enemy.interp.sample(interp_render_tick + fraction)
+			enemy_node.position = sampled if sampled != null else enemy.pos
+		else:
+			enemy_node.position = enemy.pos
 		enemy_node.update_hp(enemy.hp / maxf(enemy.max_hp, 1.0))
