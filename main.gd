@@ -52,6 +52,10 @@ func _parse_user_args() -> void:
 	var quit_index: int = args.find("--quit-after-ticks")
 	if quit_index != -1 and quit_index + 1 < args.size():
 		Session.quit_after_ticks = int(args[quit_index + 1])
+	var latency_index: int = args.find("--latency")
+	if latency_index != -1 and latency_index + 1 < args.size():
+		NetworkManager.instance.sim_latency_ms = int(args[latency_index + 1])
+		print("[main] 模擬延遲：%d ms/向" % NetworkManager.instance.sim_latency_ms)
 
 
 ## 專用伺服器：開 ENet 伺服器後直接進場景跑模擬。

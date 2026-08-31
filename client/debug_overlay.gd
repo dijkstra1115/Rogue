@@ -8,11 +8,19 @@ extends CanvasLayer
 @onready var world: Node2D = get_parent()
 
 
+## F1：循環切換人為延遲（0 / 25 / 50 / 100 ms）
+func _input(event: InputEvent) -> void:
+	var key := event as InputEventKey
+	if key != null and key.pressed and not key.echo and key.keycode == KEY_F1:
+		NetworkManager.instance.cycle_sim_latency()
+
+
 func _process(_delta: float) -> void:
 	var net := NetworkManager.instance
 	var lines: PackedStringArray = []
 
 	lines.append("tick: %d   模式: %s" % [world.current_tick, _mode_name(net)])
+	lines.append("模擬延遲: %d ms/向（F1 切換）" % net.sim_latency_ms)
 
 	var ids: Array = world.player_states.keys()
 	ids.sort()

@@ -168,11 +168,18 @@ func _broadcast_state(tick: int) -> void:
 	for peer_id: int in player_states:
 		positions[peer_id] = player_states[peer_id].pos
 		acks[peer_id] = player_states[peer_id].get("ack_tick", -1)
-	_receive_state.rpc({"t": tick, "p": positions, "a": acks})
+	var payload := {"t": tick, "p": positions, "a": acks}
+	NetworkManager.instance.send_or_delay(func() -> void: _receive_state.rpc(payload))
 
 
 @rpc("authority", "unreliable_ordered")
 func _receive_state(state_data: Dictionary) -> void:
+	NetworkManager.instance.receive_or_delay(
+		func() -> void: _apply_server_state(state_data)
+	)
+
+
+func _apply_server_state(state_data: Dictionary) -> void:
 	last_server_state_tick = state_data.get("t", -1)
 	ticks_since_server_state = 0
 	var positions: Dictionary = state_data.get("p", {})

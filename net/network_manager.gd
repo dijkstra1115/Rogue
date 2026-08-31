@@ -29,9 +29,61 @@ signal connected_ok        # 客戶端：成功連上伺服器
 signal connect_failed      # 客戶端：連線失敗
 signal server_lost         # 客戶端：連線中途斷掉
 
+## ---- 人為延遲模擬（步驟 6，M1 驗收的關鍵）----
+## 本機測試延遲是 0ms，預測/和解/插值的 bug 會完全隱形；
+## 開啟後，本機的「收」與「發」各延遲一次（模擬自己網路差），RTT 約 +2×此值。
+## F1 循環切換（debug_overlay），或啟動參數 --latency <ms>（headless 測試用）。
+const SIM_LATENCY_PRESETS_MS: Array[int] = [0, 25, 50, 100]
+
+## 模擬的單向延遲（毫秒），0 = 關閉
+var sim_latency_ms: int = 0
+
+var _sim_tick: int = 0                       # 延遲佇列自己的時基（physics frame）
+var _outgoing_queue: Array[Dictionary] = []  # [{due: int, fn: Callable}]
+var _incoming_queue: Array[Dictionary] = []
+
 
 func _enter_tree() -> void:
 	instance = self
+
+
+func _physics_process(_delta: float) -> void:
+	_sim_tick += 1
+	_flush_due(_outgoing_queue)
+	_flush_due(_incoming_queue)
+
+
+## 送出方向：無延遲直接執行；有延遲就排進佇列，到期才真正送。
+func send_or_delay(fn: Callable) -> void:
+	if sim_latency_ms <= 0:
+		fn.call()
+		return
+	_outgoing_queue.append({"due": _sim_tick + _latency_ticks(), "fn": fn})
+
+
+## 接收方向：同上，延後「處理」收到的封包。
+func receive_or_delay(fn: Callable) -> void:
+	if sim_latency_ms <= 0:
+		fn.call()
+		return
+	_incoming_queue.append({"due": _sim_tick + _latency_ticks(), "fn": fn})
+
+
+func cycle_sim_latency() -> void:
+	var index := SIM_LATENCY_PRESETS_MS.find(sim_latency_ms)
+	sim_latency_ms = SIM_LATENCY_PRESETS_MS[(index + 1) % SIM_LATENCY_PRESETS_MS.size()]
+	print("[net] 模擬延遲：%d ms/向（RTT 約 +%d ms）" % [sim_latency_ms, sim_latency_ms * 2])
+
+
+func _latency_ticks() -> int:
+	return ceili(sim_latency_ms * 60.0 / 1000.0)
+
+
+## 佇列頭到期就依序執行——只從頭部拿，保持順序（模擬 ordered 通道）
+func _flush_due(queue: Array[Dictionary]) -> void:
+	while not queue.is_empty() and queue[0].due <= _sim_tick:
+		var entry: Dictionary = queue.pop_front()
+		(entry.fn as Callable).call()
 
 
 func _ready() -> void:
@@ -68,6 +120,8 @@ func join_game(ip: String) -> Error:
 func leave() -> void:
 	multiplayer.multiplayer_peer = null
 	input_buffers.clear()
+	_outgoing_queue.clear()
+	_incoming_queue.clear()
 
 
 func is_server() -> bool:
@@ -78,7 +132,8 @@ func is_server() -> bool:
 
 ## 客戶端每 tick 呼叫：把本地 InputFrame 送到伺服器
 func submit_local_input(frame: InputFrame) -> void:
-	_submit_input.rpc_id(SERVER_PEER_ID, frame.to_dict())
+	var data := frame.to_dict()
+	send_or_delay(func() -> void: _submit_input.rpc_id(SERVER_PEER_ID, data))
 
 
 ## 伺服器端（host 兼玩家）：本地輸入不走網路，直接進緩衝
@@ -90,8 +145,11 @@ func push_input(peer_id: int, frame: InputFrame) -> void:
 func _submit_input(input_data: Dictionary) -> void:
 	if not multiplayer.is_server():
 		return
+	# sender_id 要在收到的當下抓（延遲處理時 context 已不同）
 	var sender_id := multiplayer.get_remote_sender_id()
-	_buffer_input(sender_id, InputFrame.from_dict(input_data))
+	receive_or_delay(
+		func() -> void: _buffer_input(sender_id, InputFrame.from_dict(input_data))
+	)
 
 
 func _buffer_input(peer_id: int, frame: InputFrame) -> void:
