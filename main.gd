@@ -45,6 +45,7 @@ func _ready() -> void:
 func _parse_user_args() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	wants_server = "--server" in args
+	Session.bot_mode = "--bot" in args
 	var join_index: int = args.find("--join")
 	if join_index != -1 and join_index + 1 < args.size():
 		join_ip = args[join_index + 1]

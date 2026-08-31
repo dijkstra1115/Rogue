@@ -103,15 +103,16 @@ func _buffer_input(peer_id: int, frame: InputFrame) -> void:
 		buffer.pop_front()
 
 
-## 伺服器每 tick 呼叫：取出某玩家最新的輸入並清空緩衝。
+## 伺服器每 tick 呼叫：取出某玩家「下一筆」輸入（照順序，一 tick 消化一筆）。
 ## 沒收到新輸入時回傳 null（呼叫端沿用上一筆——封包丟了也不停頓）。
-func consume_latest_input(peer_id: int) -> InputFrame:
+##
+## 刻意用 pop_front 而不是「拿最新的」：客戶端每 tick 產一筆、伺服器每 tick
+## 吃一筆，緩衝區天然吸收網路抖動。跳著吃會讓客戶端的預測常態性猜錯。
+func consume_next_input(peer_id: int) -> InputFrame:
 	var buffer: Array = input_buffers.get(peer_id, [])
 	if buffer.is_empty():
 		return null
-	var latest: InputFrame = buffer.back()
-	buffer.clear()
-	return latest
+	return buffer.pop_front()
 
 
 ## ---- 連線事件 ----

@@ -24,6 +24,11 @@ func _process(_delta: float) -> void:
 		lines.append("ping: %s   距上次伺服器狀態: %d tick" % [
 			_ping_text(), world.ticks_since_server_state,
 		])
+		if world.prediction != null:
+			lines.append("未確認輸入: %d   和解修正: %d" % [
+				world.prediction.pending_inputs.size(),
+				world.prediction.correction_count,
+			])
 
 	label.text = "\n".join(lines)
 

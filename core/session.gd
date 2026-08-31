@@ -16,3 +16,6 @@ static var join_ip: String = ""
 
 ## --quit-after-ticks <n>：世界跑滿 n 個 tick 自動結束（headless 煙霧測試用；0 = 不啟用）
 static var quit_after_ticks: int = 0
+
+## --bot：本地輸入改用合成的繞圈移動（headless 測試預測/和解用；沒有真的輸入裝置也能動）
+static var bot_mode: bool = false
