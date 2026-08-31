@@ -57,6 +57,10 @@ var prediction: ClientPrediction = null
 ## 客戶端：插值渲染時鐘（以伺服器 tick 為座標，落後最新狀態約 100ms；-1 = 未初始化）
 var interp_render_tick: float = -1.0
 
+## 伺服器：本 tick 產生的遊戲事件（揮擊、之後的受傷/死亡…），
+## tick 結尾廣播給所有客戶端做視覺呈現，然後清空
+var pending_events: Array = []
+
 
 func _ready() -> void:
 	var net := NetworkManager.instance
@@ -126,9 +130,50 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 			state.pos = PlayerSim.simulate_movement(
 				state.pos, frame, state.move_speed, ARENA_BOUNDS
 			)
+			_process_abilities(peer_id, state, frame, tick)
 			applied += 1
 
 	_broadcast_state(tick)
+	_flush_events()
+
+
+## 伺服器：依輸入觸發技能（攻擊不做客戶端預測，權威只在這裡）。
+func _process_abilities(peer_id: int, state: Dictionary, frame: InputFrame, tick: int) -> void:
+	var abilities: Dictionary = state.get("abilities", {})
+	if frame.primary and abilities.has("primary"):
+		var ability: Ability = abilities.primary
+		if ability.is_ready(tick):
+			ability.mark_used(tick, state.get("attack_speed", 1.0))
+			ability.execute(self, peer_id, frame, tick)
+
+
+## 伺服器：把本 tick 的事件廣播出去（本地也立即呈現）。
+## 事件走 reliable——揮擊/受傷這種一次性事件掉了就永遠掉了，和狀態不同。
+func _flush_events() -> void:
+	if pending_events.is_empty():
+		return
+	var events: Array = pending_events.duplicate()
+	pending_events.clear()
+	_apply_events(events)
+	NetworkManager.instance.send_or_delay(func() -> void: _receive_events.rpc(events))
+
+
+@rpc("authority", "reliable")
+func _receive_events(events: Array) -> void:
+	NetworkManager.instance.receive_or_delay(func() -> void: _apply_events(events))
+
+
+## 事件 → 視覺（純表現層）。專用伺服器不需要畫面，直接跳過。
+func _apply_events(events: Array) -> void:
+	if Session.is_dedicated_server:
+		return
+	for event: Dictionary in events:
+		match event.get("k", ""):
+			"sweep":
+				var fx := SweepArcFx.new()
+				fx.position = event.o
+				fx.aim = event.a
+				add_child(fx)
 
 
 ## 客戶端：上傳輸入，並「立刻」本地預測自己的角色（不等伺服器）。
@@ -157,6 +202,8 @@ func _capture_input(tick: int, aim_origin: Vector2) -> InputFrame:
 		var frame := InputFrame.new()
 		frame.tick = tick
 		frame.move = Vector2(sin(tick * 0.05), cos(tick * 0.05))
+		frame.aim = frame.move.normalized()
+		frame.primary = tick % 90 < 2   # 偶爾揮劍，讓煙霧測試走到事件管線
 		return frame
 	return LocalInput.capture(tick, self, aim_origin)
 
@@ -227,9 +274,13 @@ func _spawn_player(peer_id: int) -> void:
 	player_states[peer_id] = {
 		"pos": node.position,
 		"move_speed": DEFAULT_MOVE_SPEED,
+		"attack_speed": 1.0,   # 玩家屬性都是可被 modifier 改寫的變數（M3）
 		"last_input": null,
 		"ack_tick": -1,
 	}
+	# 技能只存在於伺服器（權威）。目前人人都是劍士；角色選擇是 M6 的事。
+	if NetworkManager.instance.is_server():
+		player_states[peer_id].abilities = {"primary": SwordSweep.new()}
 	player_nodes[peer_id] = node
 	# 客戶端為「自己」建立預測器（伺服器端與 host 玩家不需要——他們就是權威）；
 	# 為「別人」建立插值緩衝（伺服器端看到的就是權威位置，不需要）
