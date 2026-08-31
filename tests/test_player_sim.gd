@@ -35,7 +35,7 @@ func _init() -> void:
 
 func _make_state(pos: Vector2) -> Dictionary:
 	var state: Dictionary = {}
-	PlayerSim.init_movement(state, pos)
+	PlayerSim.init_movement(state, pos, SPEED)
 	return state
 
 
@@ -75,7 +75,7 @@ func _test_input_frame_roundtrip() -> void:
 func _test_movement_speed() -> void:
 	var state := _make_state(Vector2(200.0, 200.0))
 	for i in 60:
-		PlayerSim.step(state, _make_frame(i + 1, Vector2.RIGHT), SPEED, BOUNDS)
+		PlayerSim.step(state, _make_frame(i + 1, Vector2.RIGHT), BOUNDS)
 	_check(state.pos.distance_to(Vector2(200.0 + SPEED, 200.0)) < 0.01, "全速 60 tick 前進 move_speed 像素")
 
 
@@ -83,7 +83,7 @@ func _test_movement_speed() -> void:
 func _test_diagonal_not_faster() -> void:
 	var state := _make_state(Vector2(200.0, 200.0))
 	for i in 60:
-		PlayerSim.step(state, _make_frame(i + 1, Vector2(1.0, 1.0)), SPEED, BOUNDS)
+		PlayerSim.step(state, _make_frame(i + 1, Vector2(1.0, 1.0)), BOUNDS)
 	_check(absf(state.pos.distance_to(Vector2(200.0, 200.0)) - SPEED) < 0.01, "斜走不比直走快")
 
 
@@ -91,7 +91,7 @@ func _test_diagonal_not_faster() -> void:
 func _test_wall_clamp() -> void:
 	var state := _make_state(Vector2(200.0, 200.0))
 	for i in 600:
-		PlayerSim.step(state, _make_frame(i + 1, Vector2.LEFT), SPEED, BOUNDS)
+		PlayerSim.step(state, _make_frame(i + 1, Vector2.LEFT), BOUNDS)
 	var expected_x := BOUNDS.position.x + PlayerSim.PLAYER_HALF_SIZE
 	_check(state.pos.x == expected_x and state.pos.y == 200.0, "夾牆：停在左緣 x=%.0f" % expected_x)
 
@@ -101,7 +101,7 @@ func _test_dash() -> void:
 	# 按下 utility 起衝：DASH_TICKS 個 tick 共位移 DASH_SPEED/60*DASH_TICKS
 	var state := _make_state(Vector2(200.0, 200.0))
 	for i in PlayerSim.DASH_TICKS:
-		PlayerSim.step(state, _make_frame(i + 1, Vector2.RIGHT, true), SPEED, BOUNDS)
+		PlayerSim.step(state, _make_frame(i + 1, Vector2.RIGHT, true), BOUNDS)
 	var dash_distance := PlayerSim.DASH_SPEED / 60.0 * PlayerSim.DASH_TICKS
 	_check(
 		absf(state.pos.x - (200.0 + dash_distance)) < 0.01,
@@ -111,29 +111,29 @@ func _test_dash() -> void:
 	# 一直按住：衝刺結束後回到普通速度（上升沿才觸發，不會連環衝）
 	var held := _make_state(Vector2(200.0, 200.0))
 	for i in 60:
-		PlayerSim.step(held, _make_frame(i + 1, Vector2.RIGHT, true), SPEED, BOUNDS)
+		PlayerSim.step(held, _make_frame(i + 1, Vector2.RIGHT, true), BOUNDS)
 	var expected := 200.0 + dash_distance + (60 - PlayerSim.DASH_TICKS) * SPEED / 60.0
 	_check(absf(held.pos.x - expected) < 0.01, "按住不放只衝一次，之後恢復普通速度")
 
 	# 放開再按（冷卻中）：不觸發第二次衝刺
 	var cd := _make_state(Vector2(200.0, 200.0))
-	PlayerSim.step(cd, _make_frame(1, Vector2.RIGHT, true), SPEED, BOUNDS)
+	PlayerSim.step(cd, _make_frame(1, Vector2.RIGHT, true), BOUNDS)
 	for i in range(2, PlayerSim.DASH_TICKS + 1):
-		PlayerSim.step(cd, _make_frame(i, Vector2.RIGHT, false), SPEED, BOUNDS)
+		PlayerSim.step(cd, _make_frame(i, Vector2.RIGHT, false), BOUNDS)
 	var pos_after_dash: Vector2 = cd.pos
-	PlayerSim.step(cd, _make_frame(PlayerSim.DASH_TICKS + 1, Vector2.ZERO, true), SPEED, BOUNDS)
+	PlayerSim.step(cd, _make_frame(PlayerSim.DASH_TICKS + 1, Vector2.ZERO, true), BOUNDS)
 	_check(cd.pos == pos_after_dash, "冷卻中再按不觸發（原地不動）")
 
 	# 冷卻結束後（放開再按）能再衝
 	var again := _make_state(Vector2(300.0, 300.0))
-	PlayerSim.step(again, _make_frame(1, Vector2.RIGHT, true), SPEED, BOUNDS)
+	PlayerSim.step(again, _make_frame(1, Vector2.RIGHT, true), BOUNDS)
 	for i in range(2, PlayerSim.DASH_COOLDOWN_TICKS + 2):
-		PlayerSim.step(again, _make_frame(i, Vector2.ZERO, false), SPEED, BOUNDS)
+		PlayerSim.step(again, _make_frame(i, Vector2.ZERO, false), BOUNDS)
 	var before: Vector2 = again.pos
 	PlayerSim.step(
 		again,
 		_make_frame(PlayerSim.DASH_COOLDOWN_TICKS + 2, Vector2.RIGHT, true),
-		SPEED, BOUNDS
+		BOUNDS
 	)
 	_check(again.pos.x - before.x > SPEED / 60.0 + 0.01, "冷卻結束後能再次衝刺")
 
@@ -156,7 +156,7 @@ func _run_sim(frames: Array[InputFrame]) -> Array[Vector2]:
 	var state := _make_state(Vector2(600.0, 300.0))
 	var history: Array[Vector2] = []
 	for frame in frames:
-		PlayerSim.step(state, frame, SPEED, BOUNDS)
+		PlayerSim.step(state, frame, BOUNDS)
 		history.append(state.pos)
 	return history
 

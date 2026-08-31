@@ -157,7 +157,7 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 			# 客戶端預測永遠對不上（實測踩過的雷）。缺就凍結一格。
 			state.last_input = frame
 			state.ack_tick = frame.tick   # 回報給客戶端：你的輸入我消化到這裡了
-			PlayerSim.step(state, frame, state.move_speed, ARENA_BOUNDS)
+			PlayerSim.step(state, frame, ARENA_BOUNDS)
 			_process_abilities(peer_id, state, frame, tick)
 			applied += 1
 
@@ -246,6 +246,42 @@ func _resolve_enemy_attack(enemy_id: int, enemy: Dictionary, tick: int) -> void:
 	enemy.attack_ready_tick = tick + EnemySim.ATTACK_COOLDOWN_TICKS
 
 
+## 玩家的基礎屬性（modifier 計算的起點）。
+const BASE_STATS := {
+	"damage_mult": 1.0,
+	"attack_speed": 1.0,
+	"move_speed_mult": 1.0,
+	"max_hp": 100.0,
+}
+
+
+## 伺服器：給玩家一個道具，並重算屬性。
+func grant_item(peer_id: int, modifier: Modifier) -> void:
+	var state: Dictionary = player_states.get(peer_id, {})
+	if state.is_empty():
+		return
+	state.mods.add(modifier)
+	recompute_stats(peer_id)
+	print("[world] peer %d 獲得 %s（%d 層）" % [
+		peer_id, modifier.display_name, state.mods.stack_count_of(modifier.id),
+	])
+
+
+## 伺服器：從基礎值＋道具堆疊重算玩家屬性（堆疊變動時呼叫，不做增量修補）。
+func recompute_stats(peer_id: int) -> void:
+	var state: Dictionary = player_states[peer_id]
+	var stats: Dictionary = state.mods.compute_stats(BASE_STATS)
+	state.damage_mult = stats.damage_mult
+	state.attack_speed = stats.attack_speed
+	state.move_speed = DEFAULT_MOVE_SPEED * stats.move_speed_mult
+	# 最大生命變動：增加的部分直接補進目前血量；縮減則夾住不超過新上限
+	var old_max: float = state.max_hp
+	state.max_hp = stats.max_hp
+	if stats.max_hp > old_max:
+		state.hp += stats.max_hp - old_max
+	state.hp = minf(state.hp, state.max_hp)
+
+
 ## 伺服器：命中回饋——給攻擊者疊護盾（上限封頂）。
 func grant_shield(peer_id: int, amount: float) -> void:
 	var state: Dictionary = player_states.get(peer_id, {})
@@ -259,6 +295,20 @@ func apply_player_damage(event: Dictionary) -> void:
 	var state: Dictionary = player_states.get(event.target, {})
 	if state.is_empty():
 		return
+	# 受傷事件分發：道具可以改傷害量或整個格擋（石膚護符）
+	if state.has("mods"):
+		var ctx := {
+			"world": self,
+			"target": event.target,
+			"amount": event.amount,
+			"blocked": false,
+			"tick": event.get("tick", current_tick),
+		}
+		state.mods.dispatch_take_damage(ctx)
+		if ctx.blocked:
+			pending_events.append({"k": "blocked", "t": event.target, "o": state.pos})
+			return
+		event.amount = ctx.amount
 	var died := Combat.apply_damage_with_shield(state, event)
 	pending_events.append({
 		"k": "player_hurt", "t": event.target, "n": event.amount, "o": state.pos,
@@ -367,7 +417,7 @@ func _client_tick(tick: int, net: NetworkManager) -> void:
 	var frame := _capture_input(tick, state.pos)
 	net.submit_local_input(frame)
 	# 預測：立刻用與伺服器相同的 PlayerSim.step 模擬（本地零輸入延遲；衝刺也預測）
-	prediction.predict(state, frame, state.move_speed, ARENA_BOUNDS)
+	prediction.predict(state, frame, ARENA_BOUNDS)
 	prediction.decay_visual_error()
 
 
@@ -433,9 +483,7 @@ func _apply_server_state(state_data: Dictionary) -> void:
 			var state: Dictionary = player_states[peer_id]
 			var server_snap: Dictionary = state_data.get("mv", {}).get(peer_id, {})
 			if not server_snap.is_empty():
-				prediction.reconcile(
-					state, server_snap, acks.get(peer_id, -1), state.move_speed, ARENA_BOUNDS
-				)
+				prediction.reconcile(state, server_snap, acks.get(peer_id, -1), ARENA_BOUNDS)
 		else:
 			# 別人：最新位置進模擬狀態（邏輯用），同時進插值緩衝（渲染用）
 			var state: Dictionary = player_states[peer_id]
@@ -490,22 +538,23 @@ func _spawn_player(peer_id: int) -> void:
 		and peer_id == multiplayer.get_unique_id()
 	node.get_node("Body").color = COLOR_SELF if is_me else COLOR_OTHER
 	player_states[peer_id] = {
-		"move_speed": DEFAULT_MOVE_SPEED,
-		"attack_speed": 1.0,   # 玩家屬性都是可被 modifier 改寫的變數（M3）
+		"attack_speed": 1.0,
+		"damage_mult": 1.0,
 		"hp": 100.0,
 		"max_hp": 100.0,
 		"shield": 0.0,
 		"last_input": null,
 		"ack_tick": -1,
 	}
-	# 移動狀態欄位（pos、衝刺）由 PlayerSim 統一初始化
-	PlayerSim.init_movement(player_states[peer_id], node.position)
-	# 技能只存在於伺服器（權威）。目前人人都是劍士；角色選擇是 M6 的事。
+	# 移動狀態欄位（pos、move_speed、衝刺）由 PlayerSim 統一初始化
+	PlayerSim.init_movement(player_states[peer_id], node.position, DEFAULT_MOVE_SPEED)
+	# 技能與道具只存在於伺服器（權威）。目前人人都是劍士；角色選擇是 M6 的事。
 	if NetworkManager.instance.is_server():
 		player_states[peer_id].abilities = {
 			"primary": SwordSweep.new(),
 			"special": Grapple.new(),   # 隊友向技能（TargetKind.ALLY 的第一個實例）
 		}
+		player_states[peer_id].mods = ModifierStack.new()
 	player_nodes[peer_id] = node
 	# 客戶端為「自己」建立預測器（伺服器端與 host 玩家不需要——他們就是權威）；
 	# 為「別人」建立插值緩衝（伺服器端看到的就是權威位置，不需要）
@@ -564,7 +613,19 @@ func apply_damage(event: Dictionary) -> void:
 	if died:
 		pending_events.append({"k": "enemy_died", "t": event.target, "o": enemy.pos})
 		print("[world] 敵人 %d 被 peer %d 擊殺" % [event.target, event.source_peer])
+		var death_pos: Vector2 = enemy.pos
 		_despawn_enemy(event.target)
+		# 擊殺事件分發（亡者餘燼等 on_kill 道具；屍爆傷害的觸發係數要壓低）
+		var killer: Dictionary = player_states.get(event.source_peer, {})
+		if not killer.is_empty() and killer.has("mods"):
+			killer.mods.dispatch_kill({
+				"world": self,
+				"killer": event.source_peer,
+				"enemy_id": event.target,
+				"pos": death_pos,
+				"tick": event.tick,
+				"proc_depth": event.recursion_depth + 1,
+			})
 
 
 func _despawn_player(peer_id: int) -> void:

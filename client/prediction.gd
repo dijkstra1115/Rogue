@@ -38,12 +38,12 @@ var correction_count: int = 0
 
 
 ## 每 tick 呼叫：記錄輸入並立刻本地模擬（就地修改 state 的移動欄位）。
-func predict(state: Dictionary, frame: InputFrame, move_speed: float, bounds: Rect2) -> void:
+func predict(state: Dictionary, frame: InputFrame, bounds: Rect2) -> void:
 	pending_inputs.append(frame)
 	while pending_inputs.size() > MAX_PENDING:
 		var dropped: InputFrame = pending_inputs.pop_front()
 		predicted_history.erase(dropped.tick)
-	PlayerSim.step(state, frame, move_speed, bounds)
+	PlayerSim.step(state, frame, bounds)
 	predicted_history[frame.tick] = PlayerSim.snapshot_movement(state)
 
 
@@ -53,7 +53,6 @@ func reconcile(
 	state: Dictionary,
 	server_snap: Dictionary,
 	ack_tick: int,
-	move_speed: float,
 	bounds: Rect2
 ) -> void:
 	# 丟掉已被伺服器消化的輸入
@@ -76,7 +75,7 @@ func reconcile(
 	var old_render: Vector2 = state.pos + visual_error
 	PlayerSim.restore_movement(state, server_snap)
 	for frame in pending_inputs:
-		PlayerSim.step(state, frame, move_speed, bounds)
+		PlayerSim.step(state, frame, bounds)
 		predicted_history[frame.tick] = PlayerSim.snapshot_movement(state)
 	# 從舊的渲染位置平滑滑向新位置，而不是瞬移
 	visual_error = old_render - state.pos

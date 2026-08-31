@@ -29,8 +29,11 @@ const SHIELD_DECAY_PER_TICK := SHIELD_CAP / 300.0   # 滿盾 5 秒衰減完
 
 
 ## 初始化移動狀態欄位（生成玩家時呼叫）。
-static func init_movement(state: Dictionary, pos: Vector2) -> void:
+## move_speed 也屬於移動狀態：道具（M3）會改寫它，必須跟著快照回滾，
+## 否則撿到移速道具的瞬間，客戶端預測用的速度會和伺服器不一致。
+static func init_movement(state: Dictionary, pos: Vector2, move_speed: float) -> void:
 	state.pos = pos
+	state.move_speed = move_speed
 	state.dash_left = 0            # 衝刺剩餘 tick（>0 = 衝刺中）
 	state.dash_dir = Vector2.ZERO
 	state.dash_ready = 0           # 下次可衝刺的輸入 tick
@@ -41,6 +44,7 @@ static func init_movement(state: Dictionary, pos: Vector2) -> void:
 static func snapshot_movement(state: Dictionary) -> Dictionary:
 	return {
 		"pos": state.pos,
+		"move_speed": state.move_speed,
 		"dash_left": state.dash_left,
 		"dash_dir": state.dash_dir,
 		"dash_ready": state.dash_ready,
@@ -51,6 +55,7 @@ static func snapshot_movement(state: Dictionary) -> Dictionary:
 ## 用快照覆蓋移動狀態（和解回滾用）。
 static func restore_movement(state: Dictionary, snap: Dictionary) -> void:
 	state.pos = snap.pos
+	state.move_speed = snap.move_speed
 	state.dash_left = snap.dash_left
 	state.dash_dir = snap.dash_dir
 	state.dash_ready = snap.dash_ready
@@ -58,8 +63,9 @@ static func restore_movement(state: Dictionary, snap: Dictionary) -> void:
 
 
 ## 推進一個 tick 的移動（就地修改 state 的移動欄位）。
+## 速度直接讀 state.move_speed（單一事實來源，隨快照回滾）。
 ## 時間一律用 frame.tick（輸入的 tick 域）——伺服器與客戶端預測才有共同語言。
-static func step(state: Dictionary, frame: InputFrame, move_speed: float, bounds: Rect2) -> void:
+static func step(state: Dictionary, frame: InputFrame, bounds: Rect2) -> void:
 	# 衝刺起手：utility「上升沿」＋冷卻好＋不在衝刺中。
 	# 上升沿（而不是按住就觸發）：按住空白鍵不會冷卻一好就自動再衝。
 	if frame.utility and not state.prev_utility \
@@ -79,7 +85,7 @@ static func step(state: Dictionary, frame: InputFrame, move_speed: float, bounds
 		new_pos = state.pos + state.dash_dir * DASH_SPEED * TICK_DELTA
 	else:
 		# limit_length(1.0)：防止鍵盤斜走比直走快（或惡意客戶端送超長向量）
-		new_pos = state.pos + frame.move.limit_length(1.0) * move_speed * TICK_DELTA
+		new_pos = state.pos + frame.move.limit_length(1.0) * state.move_speed * TICK_DELTA
 
 	var min_corner := bounds.position + Vector2.ONE * PLAYER_HALF_SIZE
 	var max_corner := bounds.end - Vector2.ONE * PLAYER_HALF_SIZE

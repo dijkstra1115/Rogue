@@ -38,7 +38,7 @@ func _init() -> void:
 
 func _make_state(pos: Vector2) -> Dictionary:
 	var state: Dictionary = {}
-	PlayerSim.init_movement(state, pos)
+	PlayerSim.init_movement(state, pos, SPEED)
 	return state
 
 
@@ -59,10 +59,10 @@ func _test_perfect_network_zero_corrections() -> void:
 	var server := _make_state(START)
 	for tick in range(1, 201):
 		var frame := _make_frame(tick)
-		prediction.predict(client, frame, SPEED, BOUNDS)
-		PlayerSim.step(server, frame, SPEED, BOUNDS)
+		prediction.predict(client, frame, BOUNDS)
+		PlayerSim.step(server, frame, BOUNDS)
 		if tick % 3 == 0:
-			prediction.reconcile(client, PlayerSim.snapshot_movement(server), tick, SPEED, BOUNDS)
+			prediction.reconcile(client, PlayerSim.snapshot_movement(server), tick, BOUNDS)
 	_check(prediction.correction_count == 0, "理想網路下零和解修正（含衝刺）")
 	# 最後一次回報在 tick 198，199/200 尚未被確認——只該剩這 2 筆
 	_check(prediction.pending_inputs.size() == 2, "確認過的輸入都被清掉（只剩回報後的 2 筆）")
@@ -80,7 +80,7 @@ func _test_server_jitter_zero_corrections() -> void:
 	var max_backlog := 0
 	for tick in range(1, 181):
 		var frame := _make_frame(tick)
-		prediction.predict(client, frame, SPEED, BOUNDS)
+		prediction.predict(client, frame, BOUNDS)
 		in_flight.append(frame)
 		if tick % 7 != 0:
 			var applied := 0
@@ -88,13 +88,13 @@ func _test_server_jitter_zero_corrections() -> void:
 				if applied > 0 and in_flight.size() <= 2:
 					break
 				var served: InputFrame = in_flight.pop_front()
-				PlayerSim.step(server, served, SPEED, BOUNDS)
+				PlayerSim.step(server, served, BOUNDS)
 				server_ack = served.tick
 				applied += 1
 		max_backlog = maxi(max_backlog, in_flight.size())
 		if tick % 3 == 0 and server_ack >= 0:
 			prediction.reconcile(
-				client, PlayerSim.snapshot_movement(server), server_ack, SPEED, BOUNDS
+				client, PlayerSim.snapshot_movement(server), server_ack, BOUNDS
 			)
 	_check(prediction.correction_count == 0, "伺服器抖動（凍結+排水）下零和解修正")
 	_check(max_backlog <= 4, "積壓有界（最大 %d 筆），不隨時間成長" % max_backlog)
@@ -106,19 +106,19 @@ func _test_mispredict_replay_converges() -> void:
 	var prediction := ClientPrediction.new()
 	var client := _make_state(START)
 	for tick in range(1, 11):
-		prediction.predict(client, _make_frame(tick), SPEED, BOUNDS)
+		prediction.predict(client, _make_frame(tick), BOUNDS)
 
 	# 伺服器說：你的 tick 6 之後其實在別的地方（偏 10px）
 	var server_snap: Dictionary = prediction.predicted_history[6].duplicate()
 	server_snap.pos = server_snap.pos + Vector2(10.0, 0.0)
-	prediction.reconcile(client, server_snap, 6, SPEED, BOUNDS)
+	prediction.reconcile(client, server_snap, 6, BOUNDS)
 
 	# 手動從伺服器快照重放 tick 7..10，結果要跟和解一致
 	var expected: Dictionary = {}
-	PlayerSim.init_movement(expected, Vector2.ZERO)
+	PlayerSim.init_movement(expected, Vector2.ZERO, SPEED)
 	PlayerSim.restore_movement(expected, server_snap)
 	for tick in range(7, 11):
-		PlayerSim.step(expected, _make_frame(tick), SPEED, BOUNDS)
+		PlayerSim.step(expected, _make_frame(tick), BOUNDS)
 	_check(prediction.correction_count == 1, "預測錯誤修正一次")
 	_check(client.pos.distance_to(expected.pos) < 0.01, "重放結果＝從伺服器快照重新模擬")
 	_check(prediction.visual_error != Vector2.ZERO, "修正後有視覺偏移（平滑用）")
@@ -129,8 +129,8 @@ func _test_pending_pruned_after_ack() -> void:
 	var prediction := ClientPrediction.new()
 	var client := _make_state(START)
 	for tick in range(1, 21):
-		prediction.predict(client, _make_frame(tick), SPEED, BOUNDS)
-	prediction.reconcile(client, prediction.predicted_history[15], 15, SPEED, BOUNDS)
+		prediction.predict(client, _make_frame(tick), BOUNDS)
+	prediction.reconcile(client, prediction.predicted_history[15], 15, BOUNDS)
 	var all_after := true
 	for frame in prediction.pending_inputs:
 		if frame.tick <= 15:
