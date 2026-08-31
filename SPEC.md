@@ -29,6 +29,9 @@ godot --headless --path . --script res://tests/<file>.gd
 
 # 跑專用伺服器
 godot --headless --path . -- --server
+
+# 匯出 dedicated server（需先安裝 export templates）
+godot --headless --path . --export-release windows_server
 ```
 
 **邏輯層改動後，請自己跑一次測試再交給我。**
@@ -71,12 +74,11 @@ godot --headless --path . -- --server
 
 ## 目前狀態
 
-**M1（連線骨架）尚未開始。**
+**M1（連線骨架）已完成**（2026-08-31，驗收 5 點全過）。
 
-請先讀 `docs/00-design-overview.md`、`docs/01-networking.md`、`docs/milestones.md`，然後做三件事，**不要直接開始寫程式**：
+- 預測/和解：100ms/向延遲下和解修正 0 次
+- 匯出的 dedicated server 以 feature 分岔自動啟動，雙客戶端同連通過
+- 測試：`tests/` 下四個 headless 測試腳本，邏輯改動後都要跑
+- 除錯：F1 切換模擬延遲；`--server`、`--join <ip>`、`--bot`、`--latency <ms>`、`--quit-after-ticks <n>`
 
-1. 用一段話向我確認你理解了架構，特別是預測／和解／插值三者的分工
-2. 列出你打算建立的檔案結構
-3. 列出你打算的實作順序，以及每一步我要怎麼驗證
-
-等我確認後再開始寫第一步。
+**下一步：M2（戰鬥基礎，只做劍士）。** 開發以單機先行（見 `docs/milestones.md` 註記）。
