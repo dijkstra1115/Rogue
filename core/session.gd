@@ -13,3 +13,6 @@ static var is_dedicated_server: bool = false
 
 ## --join <ip> 啟動參數（空字串代表沒有指定）
 static var join_ip: String = ""
+
+## --quit-after-ticks <n>：世界跑滿 n 個 tick 自動結束（headless 煙霧測試用；0 = 不啟用）
+static var quit_after_ticks: int = 0
