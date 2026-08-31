@@ -13,6 +13,13 @@
 extends Node2D
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
+const ENEMY_SCENE := preload("res://scenes/enemy.tscn")
+
+## 站樁靶的血量與擺放位置（步驟 3 起改由生成器與 AI 接手）
+const DUMMY_HP := 30.0
+const DUMMY_POSITIONS: Array[Vector2] = [
+	Vector2(640, 280), Vector2(400, 200), Vector2(880, 200), Vector2(640, 540),
+]
 
 ## 可活動範圍（地板的矩形）。M4 做房間系統時改由房間提供。
 const ARENA_BOUNDS := Rect2(40, 40, 1200, 640)
@@ -61,6 +68,16 @@ var interp_render_tick: float = -1.0
 ## tick 結尾廣播給所有客戶端做視覺呈現，然後清空
 var pending_events: Array = []
 
+## enemy_id -> 敵人模擬狀態 {pos, hp, max_hp, kind}。
+## 伺服器是權威；客戶端的這份是從狀態封包同步來的鏡像（供渲染）。
+var enemy_states: Dictionary = {}
+
+## enemy_id -> 場景節點（表現層）
+var enemy_nodes: Dictionary = {}
+
+## 伺服器：敵人流水號
+var next_enemy_id: int = 1
+
 
 func _ready() -> void:
 	var net := NetworkManager.instance
@@ -73,6 +90,9 @@ func _ready() -> void:
 		net.peer_left.connect(_on_peer_left)
 		for peer_id in multiplayer.get_peers():
 			_spawn_player(peer_id)
+		# 步驟 2：先擺幾隻站樁靶練刀（步驟 3 起換成 AI 敵人）
+		for dummy_pos in DUMMY_POSITIONS:
+			_spawn_enemy("dummy", dummy_pos)
 	else:
 		# 客戶端：伺服器斷線就回主選單
 		net.server_lost.connect(_on_server_lost)
@@ -174,6 +194,13 @@ func _apply_events(events: Array) -> void:
 				fx.position = event.o
 				fx.aim = event.a
 				add_child(fx)
+			"hurt":
+				var number := DamageNumberFx.new()
+				number.position = event.o
+				number.amount = event.n
+				add_child(number)
+			"enemy_died":
+				pass   # 死亡特效之後再說（M5 打磨）；節點移除由狀態同步處理
 
 
 ## 客戶端：上傳輸入，並「立刻」本地預測自己的角色（不等伺服器）。
@@ -215,7 +242,11 @@ func _broadcast_state(tick: int) -> void:
 	for peer_id: int in player_states:
 		positions[peer_id] = player_states[peer_id].pos
 		acks[peer_id] = player_states[peer_id].get("ack_tick", -1)
-	var payload := {"t": tick, "p": positions, "a": acks}
+	var enemies: Dictionary = {}
+	for enemy_id: int in enemy_states:
+		var enemy: Dictionary = enemy_states[enemy_id]
+		enemies[enemy_id] = {"p": enemy.pos, "h": enemy.hp, "m": enemy.max_hp}
+	var payload := {"t": tick, "p": positions, "a": acks, "e": enemies}
 	NetworkManager.instance.send_or_delay(func() -> void: _receive_state.rpc(payload))
 
 
@@ -258,6 +289,23 @@ func _apply_server_state(state_data: Dictionary) -> void:
 		if not positions.has(peer_id):
 			_despawn_player(peer_id)
 
+	_sync_enemies(state_data.get("e", {}))
+
+
+## 客戶端：用伺服器狀態對齊本地的敵人鏡像（生成缺的、更新現有、移除消失的）。
+func _sync_enemies(enemy_data: Dictionary) -> void:
+	for enemy_id: int in enemy_data:
+		var data: Dictionary = enemy_data[enemy_id]
+		if not enemy_states.has(enemy_id):
+			_create_enemy_entry(enemy_id, data.p)
+		var enemy: Dictionary = enemy_states[enemy_id]
+		enemy.pos = data.p
+		enemy.hp = data.h
+		enemy.max_hp = data.m
+	for enemy_id: int in enemy_states.keys():
+		if not enemy_data.has(enemy_id):
+			_despawn_enemy(enemy_id)
+
 
 ## 生成一位玩家：模擬狀態 + 場景節點，都以 peer_id 為 key。
 func _spawn_player(peer_id: int) -> void:
@@ -290,6 +338,52 @@ func _spawn_player(peer_id: int) -> void:
 		else:
 			player_states[peer_id].interp = RemoteInterpolation.new()
 	print("[world] 生成玩家 peer %d" % peer_id)
+
+
+## 伺服器：生成一隻敵人，回傳 enemy_id。
+func _spawn_enemy(kind: String, pos: Vector2) -> int:
+	var enemy_id := next_enemy_id
+	next_enemy_id += 1
+	_create_enemy_entry(enemy_id, pos)
+	var enemy: Dictionary = enemy_states[enemy_id]
+	enemy.kind = kind
+	enemy.hp = DUMMY_HP
+	enemy.max_hp = DUMMY_HP
+	return enemy_id
+
+
+## 建立敵人的狀態與節點（伺服器生成、客戶端同步共用）。
+func _create_enemy_entry(enemy_id: int, pos: Vector2) -> void:
+	var node: Node2D = ENEMY_SCENE.instantiate()
+	node.position = pos
+	add_child(node)
+	enemy_states[enemy_id] = {
+		"pos": pos,
+		"hp": DUMMY_HP,
+		"max_hp": DUMMY_HP,
+		"kind": "dummy",
+	}
+	enemy_nodes[enemy_id] = node
+
+
+func _despawn_enemy(enemy_id: int) -> void:
+	if enemy_nodes.has(enemy_id):
+		enemy_nodes[enemy_id].queue_free()
+	enemy_nodes.erase(enemy_id)
+	enemy_states.erase(enemy_id)
+
+
+## 伺服器：結算一筆傷害事件（M3 的事件匯流排會掛在這裡）。
+func apply_damage(event: Dictionary) -> void:
+	var enemy: Dictionary = enemy_states.get(event.target, {})
+	if enemy.is_empty():
+		return
+	var died := Combat.apply_damage_to(enemy, event)
+	pending_events.append({"k": "hurt", "t": event.target, "n": event.amount, "o": enemy.pos})
+	if died:
+		pending_events.append({"k": "enemy_died", "t": event.target, "o": enemy.pos})
+		print("[world] 敵人 %d 被 peer %d 擊殺" % [event.target, event.source_peer])
+		_despawn_enemy(event.target)
 
 
 func _despawn_player(peer_id: int) -> void:
@@ -346,3 +440,10 @@ func _process(_delta: float) -> void:
 			if prediction != null and peer_id == multiplayer.get_unique_id():
 				render_pos += prediction.visual_error
 			node.position = render_pos
+
+	# 敵人：位置與血條（步驟 3 敵人會動之後，客戶端這裡改吃插值）
+	for enemy_id: int in enemy_states:
+		var enemy: Dictionary = enemy_states[enemy_id]
+		var enemy_node: Node2D = enemy_nodes[enemy_id]
+		enemy_node.position = enemy.pos
+		enemy_node.update_hp(enemy.hp / maxf(enemy.max_hp, 1.0))

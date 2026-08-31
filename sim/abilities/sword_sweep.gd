@@ -19,13 +19,19 @@ func _init() -> void:
 	scales_with_attack_speed = true
 
 
-func execute(world: Node2D, caster_id: int, frame: InputFrame, _tick: int) -> void:
+func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> void:
 	var origin: Vector2 = world.player_states[caster_id].pos
 	# 揮擊事件：伺服器本地呈現＋廣播給所有客戶端畫扇形
 	world.pending_events.append({
 		"k": "sweep", "id": caster_id, "o": origin, "a": frame.aim,
 	})
-	# 步驟 2：對扇形內的敵人套用傷害事件（帶觸發係數等欄位）
+	# 對扇形內的所有敵人結算傷害（keys 快照——apply_damage 可能移除敵人）
+	for enemy_id: int in world.enemy_states.keys():
+		var enemy: Dictionary = world.enemy_states[enemy_id]
+		if is_in_sector(origin, frame.aim, enemy.pos, RANGE, ARC_DEG):
+			world.apply_damage(
+				Combat.make_damage_event(caster_id, enemy_id, DAMAGE, tick)
+			)
 
 
 ## 扇形命中判定（純幾何，可單獨測試）。
