@@ -158,20 +158,63 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 	_flush_events()
 
 
-## 伺服器：敵人 AI——追最近的玩家，彼此保持距離。
-func _simulate_enemies(_tick: int) -> void:
+## 伺服器：敵人 AI 狀態機——追擊 →（進入距離且冷卻好）前搖 → 結算 → 冷卻追擊。
+## 前搖期間敵人定住，危險區鎖定「起手瞬間的目標位置」——玩家走出去就躲掉。
+func _simulate_enemies(tick: int) -> void:
 	if player_states.is_empty():
 		return
+	var chasing: Dictionary = {}   # 只有追擊中的敵人參與分離（前搖中不能被推動）
 	for enemy_id: int in enemy_states:
 		var enemy: Dictionary = enemy_states[enemy_id]
-		enemy.pos = EnemySim.simulate_chase(
-			enemy.pos,
-			_nearest_player_pos(enemy.pos),
-			enemy.move_speed,
-			EnemySim.STOP_RANGE,
-			ARENA_BOUNDS
-		)
-	EnemySim.apply_separation(enemy_states, EnemySim.SEPARATION_DIST, ARENA_BOUNDS)
+		match enemy.get("phase", "chase"):
+			"chase":
+				var target := _nearest_player_pos(enemy.pos)
+				enemy.pos = EnemySim.simulate_chase(
+					enemy.pos, target, enemy.move_speed, EnemySim.STOP_RANGE, ARENA_BOUNDS
+				)
+				chasing[enemy_id] = enemy
+				if tick >= enemy.get("attack_ready_tick", 0) \
+						and enemy.pos.distance_to(target) <= EnemySim.ATTACK_RANGE:
+					enemy.phase = "windup"
+					enemy.windup_end_tick = tick + EnemySim.ATTACK_WINDUP_TICKS
+					enemy.attack_pos = target   # 鎖定此刻的位置，之後不再追蹤
+					pending_events.append({
+						"k": "telegraph", "o": target, "r": EnemySim.ATTACK_RADIUS,
+						"s": tick, "e": enemy.windup_end_tick,
+					})
+			"windup":
+				if tick >= enemy.windup_end_tick:
+					_resolve_enemy_attack(enemy_id, enemy, tick)
+	EnemySim.apply_separation(chasing, EnemySim.SEPARATION_DIST, ARENA_BOUNDS)
+
+
+## 伺服器：前搖到期——圈內玩家吃傷害，敵人進冷卻。
+func _resolve_enemy_attack(enemy_id: int, enemy: Dictionary, tick: int) -> void:
+	for peer_id in EnemySim.players_hit(player_states, enemy.attack_pos, EnemySim.ATTACK_RADIUS):
+		apply_player_damage({
+			"source_enemy": enemy_id,
+			"source_kind": enemy.get("kind", "?"),   # M5 死亡回放要知道兇手是誰
+			"target": peer_id,
+			"amount": EnemySim.ATTACK_DAMAGE,
+			"tick": tick,
+		})
+	enemy.phase = "chase"
+	enemy.attack_ready_tick = tick + EnemySim.ATTACK_COOLDOWN_TICKS
+
+
+## 伺服器：玩家受傷結算。歸零暫以「原地滿血重生」佔位——倒地與救援是 M4 的事。
+func apply_player_damage(event: Dictionary) -> void:
+	var state: Dictionary = player_states.get(event.target, {})
+	if state.is_empty():
+		return
+	var died := Combat.apply_damage_to(state, event)
+	pending_events.append({
+		"k": "player_hurt", "t": event.target, "n": event.amount, "o": state.pos,
+	})
+	if died:
+		print("[world] 玩家 %d 倒下（暫以重生代替，M4 做倒地救援）" % event.target)
+		state.hp = state.max_hp
+		state.pos = ARENA_BOUNDS.get_center()
 
 
 func _nearest_player_pos(from_pos: Vector2) -> Vector2:
@@ -222,11 +265,19 @@ func _apply_events(events: Array) -> void:
 				fx.position = event.o
 				fx.aim = event.a
 				add_child(fx)
-			"hurt":
+			"hurt", "player_hurt":
 				var number := DamageNumberFx.new()
 				number.position = event.o
 				number.amount = event.n
 				add_child(number)
+			"telegraph":
+				var telegraph := TelegraphFx.new()
+				telegraph.position = event.o
+				telegraph.radius = event.r
+				telegraph.start_tick = event.s
+				telegraph.end_tick = event.e
+				telegraph.world = self
+				%DangerLayer.add_child(telegraph)
 			"enemy_died":
 				pass   # 死亡特效之後再說（M5 打磨）；節點移除由狀態同步處理
 
@@ -274,7 +325,10 @@ func _broadcast_state(tick: int) -> void:
 	for enemy_id: int in enemy_states:
 		var enemy: Dictionary = enemy_states[enemy_id]
 		enemies[enemy_id] = {"p": enemy.pos, "h": enemy.hp, "m": enemy.max_hp}
-	var payload := {"t": tick, "p": positions, "a": acks, "e": enemies}
+	var player_hp: Dictionary = {}
+	for peer_id: int in player_states:
+		player_hp[peer_id] = [player_states[peer_id].hp, player_states[peer_id].max_hp]
+	var payload := {"t": tick, "p": positions, "a": acks, "e": enemies, "hp": player_hp}
 	NetworkManager.instance.send_or_delay(func() -> void: _receive_state.rpc(payload))
 
 
@@ -317,6 +371,13 @@ func _apply_server_state(state_data: Dictionary) -> void:
 		if not positions.has(peer_id):
 			_despawn_player(peer_id)
 
+	# 玩家血量（低頻變動，直接照抄伺服器）
+	var player_hp: Dictionary = state_data.get("hp", {})
+	for peer_id: int in player_hp:
+		if player_states.has(peer_id):
+			player_states[peer_id].hp = player_hp[peer_id][0]
+			player_states[peer_id].max_hp = player_hp[peer_id][1]
+
 	_sync_enemies(state_data.get("e", {}))
 
 
@@ -353,6 +414,8 @@ func _spawn_player(peer_id: int) -> void:
 		"pos": node.position,
 		"move_speed": DEFAULT_MOVE_SPEED,
 		"attack_speed": 1.0,   # 玩家屬性都是可被 modifier 改寫的變數（M3）
+		"hp": 100.0,
+		"max_hp": 100.0,
 		"last_input": null,
 		"ack_tick": -1,
 	}
@@ -441,6 +504,14 @@ func _on_server_lost() -> void:
 	get_tree().change_scene_to_file("res://main.tscn")
 
 
+## 預告特效的時間座標：伺服器＝權威 tick；客戶端＝插值渲染時鐘——
+## 讓危險圓圈的進度和「延遲 100ms 渲染的敵人」對得上。
+func telegraph_clock() -> float:
+	if NetworkManager.instance.is_server():
+		return float(current_tick)
+	return interp_render_tick
+
+
 ## 客戶端每 tick：推進插值渲染時鐘。
 ## 時鐘以「伺服器 tick」為座標，目標永遠是最新狀態再往回 INTERP_DELAY_TICKS。
 ## 每 tick 前進 1，外加小幅追蹤目標——吸收兩端時鐘的微小漂移；
@@ -474,6 +545,7 @@ func _process(_delta: float) -> void:
 			if prediction != null and peer_id == multiplayer.get_unique_id():
 				render_pos += prediction.visual_error
 			node.position = render_pos
+		node.update_hp(state.hp / maxf(state.max_hp, 1.0))
 
 	# 敵人：位置與血條。客戶端吃插值（同遠端玩家），伺服器直接抄權威位置。
 	for enemy_id: int in enemy_states:

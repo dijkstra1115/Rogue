@@ -5,7 +5,7 @@
 extends SceneTree
 
 ## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
-const EXPECTED_CHECKS := 6
+const EXPECTED_CHECKS := 8
 
 const BOUNDS := Rect2(40, 40, 1200, 640)
 
@@ -17,6 +17,7 @@ func _init() -> void:
 	_test_chase()
 	_test_stop_range()
 	_test_separation()
+	_test_players_hit()
 
 	if check_count != EXPECTED_CHECKS:
 		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
@@ -77,6 +78,17 @@ func _test_separation() -> void:
 	EnemySim.apply_separation(corner, 26.0, BOUNDS)
 	var min_x: float = minf(corner[1].pos.x, corner[2].pos.x)
 	_check(min_x >= 54.0, "分離不會推出邊界")
+
+
+## 攻擊結算：圈內命中、圈外不中
+func _test_players_hit() -> void:
+	var players := {
+		1: {"pos": Vector2(300.0, 300.0)},   # 距中心 30 → 中
+		2: {"pos": Vector2(400.0, 300.0)},   # 距中心 70 → 不中
+	}
+	var hit := EnemySim.players_hit(players, Vector2(330.0, 300.0), 48.0)
+	_check(hit == [1], "半徑內的玩家被命中")
+	_check(EnemySim.players_hit(players, Vector2(1000.0, 1000.0), 48.0).is_empty(), "沒人站圈裡就沒人受傷")
 
 
 func _check(ok: bool, what: String) -> void:

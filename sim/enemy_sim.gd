@@ -14,6 +14,15 @@ const STOP_RANGE := 30.0
 ## 敵人彼此間的最小距離（避免全部疊成一點）
 const SEPARATION_DIST := 26.0
 
+## ---- 攻擊參數（chaser）----
+## 前搖刻意拉長（45 tick = 0.75 秒）：本作不做幀級閃避，
+## 玩家靠「看到預告→走出去」躲，預告必須給足反應時間（docs/00、02）。
+const ATTACK_RANGE := 60.0            # 與目標多近會起手
+const ATTACK_WINDUP_TICKS := 45       # 前搖長度
+const ATTACK_RADIUS := 48.0           # 危險圓半徑（鎖定起手瞬間的目標位置）
+const ATTACK_DAMAGE := 15.0
+const ATTACK_COOLDOWN_TICKS := 90     # 結算後的冷卻
+
 
 ## 朝目標追一個 tick。不會衝過頭：最多走到停止距離的邊上。
 static func simulate_chase(
@@ -45,6 +54,15 @@ static func apply_separation(states: Dictionary, min_dist: float, bounds: Rect2)
 			var amount := (min_dist - distance) * 0.5
 			a.pos = _clamp_to_bounds(a.pos - push * amount, bounds)
 			b.pos = _clamp_to_bounds(b.pos + push * amount, bounds)
+
+
+## 結算：回傳圓形危險區內的玩家 peer_id 清單（純幾何，可測試）。
+static func players_hit(players: Dictionary, center: Vector2, radius: float) -> Array[int]:
+	var hit: Array[int] = []
+	for peer_id: int in players:
+		if players[peer_id].pos.distance_to(center) <= radius:
+			hit.append(peer_id)
+	return hit
 
 
 static func _clamp_to_bounds(pos: Vector2, bounds: Rect2) -> Vector2:
