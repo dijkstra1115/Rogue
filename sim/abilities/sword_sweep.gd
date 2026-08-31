@@ -12,6 +12,10 @@ const RANGE := 90.0
 ## 基礎傷害（步驟 2 接上敵人後使用）
 const DAMAGE := 10.0
 
+## 每命中一隻敵人生成的護盾量——「持續攻擊本身就是生存手段」（docs/02）。
+## 一刀掃到越多隻、疊得越快，鼓勵衝進人群。
+const SHIELD_PER_HIT := 5.0
+
 
 func _init() -> void:
 	target_kind = TargetKind.ENEMIES
@@ -32,6 +36,7 @@ func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> voi
 			world.apply_damage(
 				Combat.make_damage_event(caster_id, enemy_id, DAMAGE, tick)
 			)
+			world.grant_shield(caster_id, SHIELD_PER_HIT)
 
 
 ## 扇形命中判定（純幾何，可單獨測試）。

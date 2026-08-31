@@ -36,3 +36,19 @@ static func apply_damage_to(state: Dictionary, event: Dictionary) -> bool:
 		return false   # 已經死了，不重複結算
 	state.hp = maxf(0.0, state.hp - event.amount)
 	return state.hp <= 0.0
+
+
+## 護盾優先吸收的傷害套用（玩家用）。護盾扣完剩餘才進血量。
+## 回傳是否因此死亡。
+static func apply_damage_with_shield(state: Dictionary, event: Dictionary) -> bool:
+	if state.get("hp", 0.0) <= 0.0:
+		return false
+	var remaining: float = event.amount
+	var shield: float = state.get("shield", 0.0)
+	var absorbed := minf(shield, remaining)
+	state.shield = shield - absorbed
+	remaining -= absorbed
+	if remaining <= 0.0:
+		return false
+	state.hp = maxf(0.0, state.hp - remaining)
+	return state.hp <= 0.0

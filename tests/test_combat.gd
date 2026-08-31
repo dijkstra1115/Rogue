@@ -5,7 +5,7 @@
 extends SceneTree
 
 ## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
-const EXPECTED_CHECKS := 7
+const EXPECTED_CHECKS := 10
 
 var failed_count: int = 0
 var check_count: int = 0
@@ -14,6 +14,7 @@ var check_count: int = 0
 func _init() -> void:
 	_test_event_structure()
 	_test_damage_application()
+	_test_shield_absorption()
 
 	if check_count != EXPECTED_CHECKS:
 		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
@@ -43,6 +44,27 @@ func _test_damage_application() -> void:
 	_check(Combat.apply_damage_to(enemy, overkill), "致死回報 true")
 	_check(enemy.hp == 0.0, "血量不會低於 0")
 	_check(not Combat.apply_damage_to(enemy, event), "已死亡不重複結算")
+
+
+## 護盾吸收：盾夠就不傷血、盾破剩餘進血、穿盾也能致死
+func _test_shield_absorption() -> void:
+	var player := {"hp": 100.0, "max_hp": 100.0, "shield": 20.0}
+	var hit := {"amount": 15.0}
+	_check(
+		not Combat.apply_damage_with_shield(player, hit)
+			and player.shield == 5.0 and player.hp == 100.0,
+		"護盾足夠：全吸收，不傷血"
+	)
+	_check(
+		not Combat.apply_damage_with_shield(player, hit)
+			and player.shield == 0.0 and player.hp == 90.0,
+		"護盾破掉：剩餘傷害進血量"
+	)
+	var dying := {"hp": 10.0, "max_hp": 100.0, "shield": 2.0}
+	_check(
+		Combat.apply_damage_with_shield(dying, {"amount": 15.0}) and dying.hp == 0.0,
+		"穿盾傷害足以致死"
+	)
 
 
 func _check(ok: bool, what: String) -> void:

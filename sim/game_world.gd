@@ -147,11 +147,14 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 			# 客戶端預測永遠對不上（實測踩過的雷）。缺就凍結一格。
 			state.last_input = frame
 			state.ack_tick = frame.tick   # 回報給客戶端：你的輸入我消化到這裡了
-			state.pos = PlayerSim.simulate_movement(
-				state.pos, frame, state.move_speed, ARENA_BOUNDS
-			)
+			PlayerSim.step(state, frame, state.move_speed, ARENA_BOUNDS)
 			_process_abilities(peer_id, state, frame, tick)
 			applied += 1
+
+	# 護盾衰減：每 tick 一次，與輸入無關（停手就開始掉，docs/02 的機制核心）
+	for peer_id: int in player_states:
+		var state: Dictionary = player_states[peer_id]
+		state.shield = maxf(0.0, state.shield - PlayerSim.SHIELD_DECAY_PER_TICK)
 
 	_simulate_enemies(tick)
 	_broadcast_state(tick)
@@ -202,18 +205,27 @@ func _resolve_enemy_attack(enemy_id: int, enemy: Dictionary, tick: int) -> void:
 	enemy.attack_ready_tick = tick + EnemySim.ATTACK_COOLDOWN_TICKS
 
 
-## 伺服器：玩家受傷結算。歸零暫以「原地滿血重生」佔位——倒地與救援是 M4 的事。
+## 伺服器：命中回饋——給攻擊者疊護盾（上限封頂）。
+func grant_shield(peer_id: int, amount: float) -> void:
+	var state: Dictionary = player_states.get(peer_id, {})
+	if state.is_empty():
+		return
+	state.shield = minf(state.shield + amount, PlayerSim.SHIELD_CAP)
+
+
+## 伺服器：玩家受傷結算（護盾優先吸收）。歸零暫以「滿血重生」佔位——倒地救援是 M4。
 func apply_player_damage(event: Dictionary) -> void:
 	var state: Dictionary = player_states.get(event.target, {})
 	if state.is_empty():
 		return
-	var died := Combat.apply_damage_to(state, event)
+	var died := Combat.apply_damage_with_shield(state, event)
 	pending_events.append({
 		"k": "player_hurt", "t": event.target, "n": event.amount, "o": state.pos,
 	})
 	if died:
 		print("[world] 玩家 %d 倒下（暫以重生代替，M4 做倒地救援）" % event.target)
 		state.hp = state.max_hp
+		state.shield = 0.0
 		state.pos = ARENA_BOUNDS.get_center()
 
 
@@ -296,8 +308,8 @@ func _client_tick(tick: int, net: NetworkManager) -> void:
 	var state: Dictionary = player_states[my_id]
 	var frame := _capture_input(tick, state.pos)
 	net.submit_local_input(frame)
-	# 預測：立刻用與伺服器相同的 PlayerSim 模擬（本地零輸入延遲的來源）
-	state.pos = prediction.predict(state.pos, frame, state.move_speed, ARENA_BOUNDS)
+	# 預測：立刻用與伺服器相同的 PlayerSim.step 模擬（本地零輸入延遲；衝刺也預測）
+	prediction.predict(state, frame, state.move_speed, ARENA_BOUNDS)
 	prediction.decay_visual_error()
 
 
@@ -309,7 +321,8 @@ func _capture_input(tick: int, aim_origin: Vector2) -> InputFrame:
 		frame.tick = tick
 		frame.move = Vector2(sin(tick * 0.05), cos(tick * 0.05))
 		frame.aim = frame.move.normalized()
-		frame.primary = tick % 90 < 2   # 偶爾揮劍，讓煙霧測試走到事件管線
+		frame.primary = tick % 90 < 2    # 偶爾揮劍，讓煙霧測試走到事件管線
+		frame.utility = tick % 150 < 2   # 偶爾衝刺，驗證衝刺預測在延遲下收斂
 		return frame
 	return LocalInput.capture(tick, self, aim_origin)
 
@@ -326,9 +339,16 @@ func _broadcast_state(tick: int) -> void:
 		var enemy: Dictionary = enemy_states[enemy_id]
 		enemies[enemy_id] = {"p": enemy.pos, "h": enemy.hp, "m": enemy.max_hp}
 	var player_hp: Dictionary = {}
+	var move_snaps: Dictionary = {}
 	for peer_id: int in player_states:
-		player_hp[peer_id] = [player_states[peer_id].hp, player_states[peer_id].max_hp]
-	var payload := {"t": tick, "p": positions, "a": acks, "e": enemies, "hp": player_hp}
+		var state: Dictionary = player_states[peer_id]
+		player_hp[peer_id] = [state.hp, state.max_hp, state.shield]
+		# 完整移動快照（含衝刺狀態）：客戶端和解回滾需要，不能只給位置
+		move_snaps[peer_id] = PlayerSim.snapshot_movement(state)
+	var payload := {
+		"t": tick, "p": positions, "a": acks, "e": enemies,
+		"hp": player_hp, "mv": move_snaps,
+	}
 	NetworkManager.instance.send_or_delay(func() -> void: _receive_state.rpc(payload))
 
 
@@ -350,15 +370,13 @@ func _apply_server_state(state_data: Dictionary) -> void:
 		if not player_states.has(peer_id):
 			_spawn_player(peer_id)
 		if peer_id == my_id and prediction != null:
-			# 自己：走和解（比對預測歷史，必要時回滾重放）
+			# 自己：走和解（比對預測歷史，必要時用伺服器移動快照回滾重放）
 			var state: Dictionary = player_states[peer_id]
-			state.pos = prediction.reconcile(
-				state.pos,
-				positions[peer_id],
-				acks.get(peer_id, -1),
-				state.move_speed,
-				ARENA_BOUNDS
-			)
+			var server_snap: Dictionary = state_data.get("mv", {}).get(peer_id, {})
+			if not server_snap.is_empty():
+				prediction.reconcile(
+					state, server_snap, acks.get(peer_id, -1), state.move_speed, ARENA_BOUNDS
+				)
 		else:
 			# 別人：最新位置進模擬狀態（邏輯用），同時進插值緩衝（渲染用）
 			var state: Dictionary = player_states[peer_id]
@@ -377,6 +395,7 @@ func _apply_server_state(state_data: Dictionary) -> void:
 		if player_states.has(peer_id):
 			player_states[peer_id].hp = player_hp[peer_id][0]
 			player_states[peer_id].max_hp = player_hp[peer_id][1]
+			player_states[peer_id].shield = player_hp[peer_id][2]
 
 	_sync_enemies(state_data.get("e", {}))
 
@@ -411,14 +430,16 @@ func _spawn_player(peer_id: int) -> void:
 		and peer_id == multiplayer.get_unique_id()
 	node.get_node("Body").color = COLOR_SELF if is_me else COLOR_OTHER
 	player_states[peer_id] = {
-		"pos": node.position,
 		"move_speed": DEFAULT_MOVE_SPEED,
 		"attack_speed": 1.0,   # 玩家屬性都是可被 modifier 改寫的變數（M3）
 		"hp": 100.0,
 		"max_hp": 100.0,
+		"shield": 0.0,
 		"last_input": null,
 		"ack_tick": -1,
 	}
+	# 移動狀態欄位（pos、衝刺）由 PlayerSim 統一初始化
+	PlayerSim.init_movement(player_states[peer_id], node.position)
 	# 技能只存在於伺服器（權威）。目前人人都是劍士；角色選擇是 M6 的事。
 	if NetworkManager.instance.is_server():
 		player_states[peer_id].abilities = {"primary": SwordSweep.new()}
@@ -546,6 +567,7 @@ func _process(_delta: float) -> void:
 				render_pos += prediction.visual_error
 			node.position = render_pos
 		node.update_hp(state.hp / maxf(state.max_hp, 1.0))
+		node.update_shield(state.get("shield", 0.0) / PlayerSim.SHIELD_CAP)
 
 	# 敵人：位置與血條。客戶端吃插值（同遠端玩家），伺服器直接抄權威位置。
 	for enemy_id: int in enemy_states:
