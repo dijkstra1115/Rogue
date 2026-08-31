@@ -8,7 +8,8 @@
 ##   客戶端上傳輸入並「立刻」本地預測自己的角色（零輸入延遲）；
 ##   伺服器權威模擬所有人，狀態帶著 ack（最後消化的輸入 tick）廣播回來；
 ##   客戶端比對 ack 那格的預測歷史，不一致就回滾重放（ClientPrediction）。
-##   別人的角色目前仍直接套用位置，會抖——步驟 5（插值）解決。
+##   別人的角色：狀態進緩衝，渲染刻意落後 100ms 做插值（RemoteInterpolation）。
+##   節點位置一律在 _process 更新（純視覺）；_physics_process 只推進模擬。
 extends Node2D
 
 const PLAYER_SCENE := preload("res://scenes/player.tscn")
@@ -24,6 +25,12 @@ const INPUT_BACKLOG_TARGET := 2
 
 ## 積壓太多時，一個 tick 最多補吃幾筆（防止長卡頓後瞬間跳很遠）
 const MAX_INPUTS_PER_TICK := 3
+
+## 遠端玩家渲染刻意落後的 tick 數（6 tick = 100ms @60Hz）
+const INTERP_DELAY_TICKS := 6
+
+## 插值時鐘與目標脫節超過這個 tick 數就直接跳（例如長時間卡頓後）
+const INTERP_SNAP_LIMIT := 30.0
 
 ## 佔位配色：自己藍色、別人綠色。（品紅/橘紅保留給敵人危險區域，不可用）
 const COLOR_SELF := Color(0.3, 0.62, 1.0)
@@ -46,6 +53,9 @@ var ticks_since_server_state: int = 0
 
 ## 客戶端：自己角色的預測與和解（伺服器與 host 玩家不需要，維持 null）
 var prediction: ClientPrediction = null
+
+## 客戶端：插值渲染時鐘（以伺服器 tick 為座標，落後最新狀態約 100ms；-1 = 未初始化）
+var interp_render_tick: float = -1.0
 
 
 func _ready() -> void:
@@ -86,13 +96,6 @@ func _simulate_tick(tick: int) -> void:
 	else:
 		_client_tick(tick, net)
 
-	# 模擬結果 → 節點位置（表現層永遠只是抄狀態）。
-	# 自己的角色多加 visual_error：和解修正時平滑滑回去，不瞬移。
-	for peer_id: int in player_states:
-		var render_pos: Vector2 = player_states[peer_id].pos
-		if prediction != null and peer_id == multiplayer.get_unique_id():
-			render_pos += prediction.visual_error
-		player_nodes[peer_id].position = render_pos
 
 
 ## 伺服器：權威模擬所有玩家，然後廣播狀態。
@@ -131,6 +134,7 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 ## 客戶端：上傳輸入，並「立刻」本地預測自己的角色（不等伺服器）。
 func _client_tick(tick: int, net: NetworkManager) -> void:
 	ticks_since_server_state += 1
+	_advance_interp_clock()
 	var my_id := multiplayer.get_unique_id()
 
 	# 還沒收到自己的出生狀態：先送輸入就好
@@ -189,8 +193,11 @@ func _receive_state(state_data: Dictionary) -> void:
 				ARENA_BOUNDS
 			)
 		else:
-			# 別人：直接套用（步驟 5 改成延遲插值）
-			player_states[peer_id].pos = positions[peer_id]
+			# 別人：最新位置進模擬狀態（邏輯用），同時進插值緩衝（渲染用）
+			var state: Dictionary = player_states[peer_id]
+			state.pos = positions[peer_id]
+			if state.has("interp"):
+				state.interp.push_state(last_server_state_tick, positions[peer_id])
 
 	# 狀態裡消失的玩家＝離開了，移除
 	for peer_id: int in player_states.keys():
@@ -217,9 +224,13 @@ func _spawn_player(peer_id: int) -> void:
 		"ack_tick": -1,
 	}
 	player_nodes[peer_id] = node
-	# 客戶端為「自己」建立預測器（伺服器端與 host 玩家不需要——他們就是權威）
-	if is_me and not NetworkManager.instance.is_server():
-		prediction = ClientPrediction.new()
+	# 客戶端為「自己」建立預測器（伺服器端與 host 玩家不需要——他們就是權威）；
+	# 為「別人」建立插值緩衝（伺服器端看到的就是權威位置，不需要）
+	if not NetworkManager.instance.is_server():
+		if is_me:
+			prediction = ClientPrediction.new()
+		else:
+			player_states[peer_id].interp = RemoteInterpolation.new()
 	print("[world] 生成玩家 peer %d" % peer_id)
 
 
@@ -242,3 +253,38 @@ func _on_peer_left(peer_id: int) -> void:
 func _on_server_lost() -> void:
 	print("[world] 與伺服器斷線，回主選單")
 	get_tree().change_scene_to_file("res://main.tscn")
+
+
+## 客戶端每 tick：推進插值渲染時鐘。
+## 時鐘以「伺服器 tick」為座標，目標永遠是最新狀態再往回 INTERP_DELAY_TICKS。
+## 每 tick 前進 1，外加小幅追蹤目標——吸收兩端時鐘的微小漂移；
+## 脫節太大（長卡頓）就直接跳過去。
+func _advance_interp_clock() -> void:
+	if last_server_state_tick < 0:
+		return
+	var target := float(last_server_state_tick - INTERP_DELAY_TICKS)
+	if interp_render_tick < 0.0 or absf(target - interp_render_tick) > INTERP_SNAP_LIMIT:
+		interp_render_tick = target
+		return
+	interp_render_tick += 1.0 + clampf((target - interp_render_tick) * 0.1, -0.5, 0.5)
+
+
+## 視覺更新（_process）：把狀態抄到節點上。純表現，不碰任何邏輯。
+##   自己　：模擬位置 + 和解的視覺偏移（平滑滑回，不瞬移）
+##   別人　：插值緩衝取樣（落後 100ms 的平滑位置）
+##   伺服器：權威位置直接抄
+func _process(_delta: float) -> void:
+	# physics fraction：在兩個 physics tick 之間再細分，高更新率螢幕也平滑
+	var fraction := Engine.get_physics_interpolation_fraction()
+	for peer_id: int in player_states:
+		var state: Dictionary = player_states[peer_id]
+		var node: Node2D = player_nodes[peer_id]
+		if state.has("interp"):
+			var sampled: Variant = state.interp.sample(interp_render_tick + fraction)
+			if sampled != null:
+				node.position = sampled
+		else:
+			var render_pos: Vector2 = state.pos
+			if prediction != null and peer_id == multiplayer.get_unique_id():
+				render_pos += prediction.visual_error
+			node.position = render_pos

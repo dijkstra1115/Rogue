@@ -11,7 +11,11 @@ const BOUNDS := Rect2(40, 40, 1200, 640)
 const SPEED := 320.0
 const START := Vector2(600.0, 300.0)
 
+## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
+const EXPECTED_CHECKS := 11
+
 var failed_count: int = 0
+var check_count: int = 0
 
 
 func _init() -> void:
@@ -21,11 +25,15 @@ func _init() -> void:
 	_test_pending_pruned_after_ack()
 	_test_visual_error_decays()
 
-	if failed_count == 0:
+	if check_count != EXPECTED_CHECKS:
+		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
+		quit(1)
+	elif failed_count == 0:
 		print("PASS: 預測/和解測試全部通過")
+		quit(0)
 	else:
 		print("FAIL: %d 項檢查失敗" % failed_count)
-	quit(0 if failed_count == 0 else 1)
+		quit(1)
 
 
 func _make_frame(tick: int) -> InputFrame:
@@ -133,6 +141,7 @@ func _test_visual_error_decays() -> void:
 
 
 func _check(ok: bool, what: String) -> void:
+	check_count += 1
 	if ok:
 		print("  ok - %s" % what)
 	else:

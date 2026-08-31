@@ -33,6 +33,15 @@ func _process(_delta: float) -> void:
 				world.prediction.pending_inputs.size(),
 				world.prediction.correction_count,
 			])
+		var interp_sizes: Dictionary = {}
+		for peer_id: int in world.player_states:
+			var state: Dictionary = world.player_states[peer_id]
+			if state.has("interp"):
+				interp_sizes[peer_id] = state.interp.size()
+		if not interp_sizes.is_empty():
+			lines.append("插值時鐘: %.1f   緩衝: %s" % [
+				world.interp_render_tick, str(interp_sizes),
+			])
 
 	label.text = "\n".join(lines)
 

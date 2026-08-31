@@ -6,7 +6,11 @@
 ## 全部通過印出 PASS 並以 exit code 0 結束；任何失敗印出 FAIL 並以 1 結束。
 extends SceneTree
 
+## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
+const EXPECTED_CHECKS := 6
+
 var failed_count: int = 0
+var check_count: int = 0
 
 
 func _init() -> void:
@@ -27,14 +31,19 @@ func _init() -> void:
 	var arena_scene: PackedScene = load("res://scenes/arena.tscn")
 	_check(arena_scene != null and arena_scene.can_instantiate(), "arena.tscn 能載入並實例化")
 
-	if failed_count == 0:
+	if check_count != EXPECTED_CHECKS:
+		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
+		quit(1)
+	elif failed_count == 0:
 		print("PASS: 專案設定測試全部通過")
+		quit(0)
 	else:
 		print("FAIL: %d 項檢查失敗" % failed_count)
-	quit(0 if failed_count == 0 else 1)
+		quit(1)
 
 
 func _check(ok: bool, what: String) -> void:
+	check_count += 1
 	if ok:
 		print("  ok - %s" % what)
 	else:

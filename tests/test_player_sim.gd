@@ -7,7 +7,11 @@ extends SceneTree
 const BOUNDS := Rect2(40, 40, 1200, 640)
 const SPEED := 320.0
 
+## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
+const EXPECTED_CHECKS := 6
+
 var failed_count: int = 0
+var check_count: int = 0
 
 
 func _init() -> void:
@@ -17,11 +21,15 @@ func _init() -> void:
 	_test_wall_clamp()
 	_test_determinism()
 
-	if failed_count == 0:
+	if check_count != EXPECTED_CHECKS:
+		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
+		quit(1)
+	elif failed_count == 0:
 		print("PASS: 玩家模擬測試全部通過")
+		quit(0)
 	else:
 		print("FAIL: %d 項檢查失敗" % failed_count)
-	quit(0 if failed_count == 0 else 1)
+		quit(1)
 
 
 ## to_dict / from_dict 往返後每個欄位都要一致
@@ -106,6 +114,7 @@ func _run_sim(frames: Array[InputFrame]) -> Array[Vector2]:
 
 
 func _check(ok: bool, what: String) -> void:
+	check_count += 1
 	if ok:
 		print("  ok - %s" % what)
 	else:
