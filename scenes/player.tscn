@@ -1,0 +1,10 @@
+[gd_scene format=3]
+
+[node name="Player" type="Node2D"]
+
+[node name="Body" type="ColorRect" parent="."]
+offset_left = -16.0
+offset_top = -16.0
+offset_right = 16.0
+offset_bottom = 16.0
+color = Color(0.3, 0.62, 1, 1)

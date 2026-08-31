@@ -17,8 +17,12 @@ var join_ip: String = ""
 func _ready() -> void:
 	_parse_user_args()
 
+	# 把模式寫進 Session（static），讓之後的場景不必重複判斷
+	Session.is_dedicated_server = OS.has_feature("dedicated_server") or wants_server
+	Session.join_ip = join_ip
+
 	# 分岔：專用伺服器模式（headless，不顯示選單、不生成本地玩家）
-	if OS.has_feature("dedicated_server") or wants_server:
+	if Session.is_dedicated_server:
 		_start_dedicated_server()
 		return
 
