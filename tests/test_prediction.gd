@@ -63,19 +63,28 @@ func _test_server_jitter_zero_corrections() -> void:
 	var server_pos := START
 	var in_flight: Array[InputFrame] = []   # 模擬網路中的輸入佇列
 	var server_ack := -1
+	var max_backlog := 0
 	for tick in range(1, 181):
 		var frame := _make_frame(tick)
 		client_pos = prediction.predict(client_pos, frame, SPEED, BOUNDS)
 		in_flight.append(frame)
-		# 伺服器：每 7 tick「晚到一拍」什麼都收不到；其餘每 tick 照序吃一筆
-		if tick % 7 != 0 and not in_flight.is_empty():
-			var served: InputFrame = in_flight.pop_front()
-			server_pos = PlayerSim.simulate_movement(server_pos, served, SPEED, BOUNDS)
-			server_ack = served.tick
+		# 伺服器：每 7 tick「晚到一拍」什麼都收不到；
+		# 其餘 tick 照序吃一筆，積壓超過水位（2）就多吃幾筆排水（同 game_world 政策）
+		if tick % 7 != 0:
+			var applied := 0
+			while applied < 3 and not in_flight.is_empty():
+				if applied > 0 and in_flight.size() <= 2:
+					break
+				var served: InputFrame = in_flight.pop_front()
+				server_pos = PlayerSim.simulate_movement(server_pos, served, SPEED, BOUNDS)
+				server_ack = served.tick
+				applied += 1
+		max_backlog = maxi(max_backlog, in_flight.size())
 		# 每 3 tick 回報一次狀態
 		if tick % 3 == 0 and server_ack >= 0:
 			client_pos = prediction.reconcile(client_pos, server_pos, server_ack, SPEED, BOUNDS)
-	_check(prediction.correction_count == 0, "伺服器抖動（凍結補吃）下零和解修正")
+	_check(prediction.correction_count == 0, "伺服器抖動（凍結+排水）下零和解修正")
+	_check(max_backlog <= 4, "積壓有界（最大 %d 筆），不隨時間成長" % max_backlog)
 
 
 ## 伺服器回報一個偏掉的位置：要修正一次，且重放後的位置

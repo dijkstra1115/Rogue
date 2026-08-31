@@ -20,6 +20,10 @@ func _process(_delta: float) -> void:
 
 	if net.is_server():
 		lines.append("已連線 peers: %s" % str(multiplayer.get_peers()))
+		var backlog: Dictionary = {}
+		for peer_id: int in net.input_buffers:
+			backlog[peer_id] = net.buffered_input_count(peer_id)
+		lines.append("輸入積壓: %s" % str(backlog))
 	else:
 		lines.append("ping: %s   距上次伺服器狀態: %d tick" % [
 			_ping_text(), world.ticks_since_server_state,

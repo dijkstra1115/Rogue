@@ -115,6 +115,12 @@ func consume_next_input(peer_id: int) -> InputFrame:
 	return buffer.pop_front()
 
 
+## 目前積壓中的輸入筆數（伺服器排水邏輯與除錯疊層用）
+func buffered_input_count(peer_id: int) -> int:
+	var buffer: Array = input_buffers.get(peer_id, [])
+	return buffer.size()
+
+
 ## ---- 連線事件 ----
 
 func _on_peer_connected(peer_id: int) -> void:

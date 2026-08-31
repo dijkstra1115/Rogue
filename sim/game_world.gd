@@ -19,6 +19,12 @@ const ARENA_BOUNDS := Rect2(40, 40, 1200, 640)
 ## 預設移動速度（像素/秒）。放進每位玩家的狀態，M3 的 modifier 會動態改寫。
 const DEFAULT_MOVE_SPEED := 320.0
 
+## 輸入緩衝的目標水位（筆）。夠吸收抖動，又不讓伺服器落後太多。
+const INPUT_BACKLOG_TARGET := 2
+
+## 積壓太多時，一個 tick 最多補吃幾筆（防止長卡頓後瞬間跳很遠）
+const MAX_INPUTS_PER_TICK := 3
+
 ## 佔位配色：自己藍色、別人綠色。（品紅/橘紅保留給敵人危險區域，不可用）
 const COLOR_SELF := Color(0.3, 0.62, 1.0)
 const COLOR_OTHER := Color(0.35, 0.85, 0.45)
@@ -100,17 +106,24 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 
 	for peer_id: int in player_states:
 		var state: Dictionary = player_states[peer_id]
-		var frame: InputFrame = net.consume_next_input(peer_id)
-		if frame != null:
+		# 正常一 tick 吃一筆；積壓超過目標水位就多吃幾筆「排水」。
+		# 抖動造成的凍結若不排水，積壓只增不減：ack 越落後、
+		# 未確認輸入越堆越多，最後頂到緩衝上限開始丟輸入。
+		var applied := 0
+		while applied < MAX_INPUTS_PER_TICK:
+			if applied > 0 and net.buffered_input_count(peer_id) <= INPUT_BACKLOG_TARGET:
+				break
+			var frame: InputFrame = net.consume_next_input(peer_id)
+			if frame == null:
+				break
+			# 千萬不要在缺輸入時「沿用上一筆再模擬」——同一筆輸入套用兩次，
+			# 客戶端預測永遠對不上（實測踩過的雷）。缺就凍結一格。
 			state.last_input = frame
 			state.ack_tick = frame.tick   # 回報給客戶端：你的輸入我消化到這裡了
 			state.pos = PlayerSim.simulate_movement(
 				state.pos, frame, state.move_speed, ARENA_BOUNDS
 			)
-		# 沒收到新輸入：這 tick 凍結這位玩家（不模擬）。
-		# 千萬不要「沿用上一筆再模擬」——那等於同一筆輸入套用兩次，
-		# 客戶端預測永遠對不上，和解修正會無限 +1（實測踩過的雷）。
-		# 每筆輸入兩邊各套用恰好一次、順序相同 → 位置必然收斂。
+			applied += 1
 
 	_broadcast_state(tick)
 
