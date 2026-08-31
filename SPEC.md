@@ -81,4 +81,7 @@ godot --headless --path . --export-release windows_server
 - 測試：`tests/` 下四個 headless 測試腳本，邏輯改動後都要跑
 - 除錯：F1 切換模擬延遲；`--server`、`--join <ip>`、`--bot`、`--latency <ms>`、`--quit-after-ticks <n>`
 
-**下一步：M2（戰鬥基礎，只做劍士）。** 開發以單機先行（見 `docs/milestones.md` 註記）。
+**M2（戰鬥基礎，劍士）已完成**（2026-08-31，雙人驗收通過）：
+扇形揮擊、命中護盾、預測式衝刺、敵人追擊＋品紅預告、波次生成、抓鉤（隊友向技能）。
+
+**下一步：M3（Modifier 架構）。** 開發以單機先行（見 `docs/milestones.md` 註記）。
