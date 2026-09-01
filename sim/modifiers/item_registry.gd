@@ -5,6 +5,8 @@ extends RefCounted
 
 const ITEMS := {
 	"whetstone": preload("res://sim/modifiers/items/whetstone.gd"),
+	"swift_feather": preload("res://sim/modifiers/items/swift_feather.gd"),
+	"shattered_mirror": preload("res://sim/modifiers/items/shattered_mirror.gd"),
 }
 
 

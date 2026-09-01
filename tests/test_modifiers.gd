@@ -5,7 +5,7 @@
 extends SceneTree
 
 ## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
-const EXPECTED_CHECKS := 12
+const EXPECTED_CHECKS := 15
 
 var failed_count: int = 0
 var check_count: int = 0
@@ -117,6 +117,30 @@ func _test_item_registry() -> void:
 	stack.add(item)
 	var stats := stack.compute_stats({"damage_mult": 1.0})
 	_check(absf(stats.damage_mult - 1.6) < 0.001, "磨刀石 5 層 → 傷害 ×1.6")
+
+	# 疾風羽：2 層 → 攻速 1.3
+	var feather_stack := ModifierStack.new()
+	feather_stack.add(ItemRegistry.create("swift_feather", 2))
+	var feather_stats := feather_stack.compute_stats({"attack_speed": 1.0})
+	_check(absf(feather_stats.attack_speed - 1.3) < 0.001, "疾風羽 2 層 → 攻速 1.3")
+
+	# 碎裂之鏡＋磨刀石：加法先跑、乘法後跑 → (1+0.12)×2 = 2.24；血 100→50
+	var curse_stack := ModifierStack.new()
+	curse_stack.add(ItemRegistry.create("shattered_mirror"))
+	curse_stack.add(ItemRegistry.create("whetstone"))
+	var curse_stats := curse_stack.compute_stats({"damage_mult": 1.0, "max_hp": 100.0})
+	_check(
+		absf(curse_stats.damage_mult - 2.24) < 0.001 and curse_stats.max_hp == 50.0,
+		"碎鏡×磨刀石：先加後乘 = 2.24，血減半"
+	)
+	# 碎鏡 2 層：×4、血 25
+	var double_curse := ModifierStack.new()
+	double_curse.add(ItemRegistry.create("shattered_mirror", 2))
+	var double_stats := double_curse.compute_stats({"damage_mult": 1.0, "max_hp": 100.0})
+	_check(
+		double_stats.damage_mult == 4.0 and double_stats.max_hp == 25.0,
+		"碎鏡 2 層：傷害 ×4、血 25"
+	)
 
 
 func _check(ok: bool, what: String) -> void:
