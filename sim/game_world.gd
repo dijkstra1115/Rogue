@@ -90,6 +90,14 @@ var next_wave_tick: int = 60
 ## 波次出生點用的隨機數（固定種子——重現問題時每次跑都一樣）
 var wave_rng := RandomNumberGenerator.new()
 
+## ---- 測試模式（sandbox）----
+## 滾動視窗（180 tick = 3 秒）的傷害與觸發紀錄，算即時 DPS／每秒觸發
+const SANDBOX_WINDOW_TICKS := 180
+var sandbox_damage_log: Array = []       # [{t, n}]
+var sandbox_proc_log: Array = []         # [{t}]
+var sandbox_attack_speed_override: float = 0.0        # 0 = 不覆寫
+var sandbox_proc_coefficient_override: float = -1.0   # < 0 = 不覆寫
+
 
 func _ready() -> void:
 	var net := NetworkManager.instance
@@ -103,6 +111,8 @@ func _ready() -> void:
 		for peer_id in multiplayer.get_peers():
 			_spawn_player(peer_id)
 		wave_rng.seed = hash("rogue-waves")   # 固定種子，重現容易
+		if Session.sandbox_mode:
+			_setup_sandbox()
 	else:
 		# 客戶端：伺服器斷線就回主選單
 		net.server_lost.connect(_on_server_lost)
@@ -168,12 +178,59 @@ func _server_tick(tick: int, net: NetworkManager) -> void:
 
 	_simulate_enemies(tick)
 	_update_waves(tick)
+	if Session.sandbox_mode:
+		_sandbox_tick(tick)
 	_broadcast_state(tick)
 	_flush_events()
 
 
+## 測試模式：沙包一隻（不追不打、血量巨大、自動回滿），掛上道具面板。
+func _setup_sandbox() -> void:
+	var bag_id := _spawn_enemy("bag", Vector2(880, 360))
+	var bag: Dictionary = enemy_states[bag_id]
+	bag.hp = 999999.0
+	bag.max_hp = 999999.0
+	bag.phase = "bag"   # 不進入追擊/前搖狀態機
+	var panel := preload("res://client/sandbox_panel.gd").new()
+	panel.world = self
+	add_child(panel)
+	print("[world] 測試模式：沙包就緒")
+
+
+## 測試模式的每 tick 維護：修剪統計視窗、沙包回血。
+func _sandbox_tick(tick: int) -> void:
+	while not sandbox_damage_log.is_empty() \
+			and sandbox_damage_log[0].t < tick - SANDBOX_WINDOW_TICKS:
+		sandbox_damage_log.pop_front()
+	while not sandbox_proc_log.is_empty() \
+			and sandbox_proc_log[0].t < tick - SANDBOX_WINDOW_TICKS:
+		sandbox_proc_log.pop_front()
+	for enemy: Dictionary in enemy_states.values():
+		if enemy.kind == "bag" and enemy.hp < enemy.max_hp * 0.5:
+			enemy.hp = enemy.max_hp
+
+
+## 道具觸發時回報（測試模式的「每秒觸發」統計；正式模式是 no-op）
+func record_proc(_name: String) -> void:
+	if Session.sandbox_mode:
+		sandbox_proc_log.append({"t": current_tick})
+
+
+func sandbox_dps() -> float:
+	var total := 0.0
+	for entry: Dictionary in sandbox_damage_log:
+		total += entry.n
+	return total / (SANDBOX_WINDOW_TICKS / 60.0)
+
+
+func sandbox_procs_per_sec() -> float:
+	return sandbox_proc_log.size() / (SANDBOX_WINDOW_TICKS / 60.0)
+
+
 ## 伺服器：清場 → 休息 → 出下一波（隻數隨波次成長）。
 func _update_waves(tick: int) -> void:
+	if Session.sandbox_mode:
+		return   # 測試模式沒有波次，只有沙包
 	if player_states.is_empty():
 		return   # 還沒有玩家（例如剛開的專用伺服器）就先不出怪
 	if not enemy_states.is_empty():
@@ -273,6 +330,9 @@ func recompute_stats(peer_id: int) -> void:
 	var stats: Dictionary = state.mods.compute_stats(BASE_STATS)
 	state.damage_mult = stats.damage_mult
 	state.attack_speed = stats.attack_speed
+	# 測試模式的攻速覆寫（弓手節奏模擬）
+	if sandbox_attack_speed_override > 0.0:
+		state.attack_speed = sandbox_attack_speed_override
 	state.move_speed = DEFAULT_MOVE_SPEED * stats.move_speed_mult
 	# 最大生命變動：增加的部分直接補進目前血量；縮減則夾住不超過新上限
 	var old_max: float = state.max_hp
@@ -609,6 +669,8 @@ func apply_damage(event: Dictionary) -> void:
 	if enemy.is_empty():
 		return
 	var died := Combat.apply_damage_to(enemy, event)
+	if Session.sandbox_mode:
+		sandbox_damage_log.append({"t": current_tick, "n": event.amount})
 	pending_events.append({"k": "hurt", "t": event.target, "n": event.amount, "o": enemy.pos})
 	if died:
 		pending_events.append({"k": "enemy_died", "t": event.target, "o": enemy.pos})

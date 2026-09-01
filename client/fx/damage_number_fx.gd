@@ -12,6 +12,7 @@ var _label: Label
 
 
 func _ready() -> void:
+	add_to_group("fx")   # 測試模式統計特效數量用
 	_label = Label.new()
 	_label.text = str(roundi(amount))
 	_label.position = Vector2(-12.0, -36.0)

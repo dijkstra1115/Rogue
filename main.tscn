@@ -49,6 +49,11 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Join（加入）"
 
+[node name="SandboxButton" type="Button" parent="CenterContainer/Menu"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "測試模式（沙包）"
+
 [node name="StatusLabel" type="Label" parent="CenterContainer/Menu"]
 unique_name_in_owner = true
 layout_mode = 2

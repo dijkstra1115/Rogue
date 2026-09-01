@@ -19,3 +19,6 @@ static var quit_after_ticks: int = 0
 
 ## --bot：本地輸入改用合成的繞圈移動（headless 測試預測/和解用；沒有真的輸入裝置也能動）
 static var bot_mode: bool = false
+
+## --sandbox（或主選單按鈕）：測試模式——空房＋沙包＋道具面板（docs/03 第七節）
+static var sandbox_mode: bool = false

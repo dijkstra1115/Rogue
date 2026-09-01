@@ -13,6 +13,10 @@ var range_px: float = SwordSweep.RANGE
 var _age: int = 0
 
 
+func _ready() -> void:
+	add_to_group("fx")   # 測試模式統計特效數量用
+
+
 func _draw() -> void:
 	var points: PackedVector2Array = [Vector2.ZERO]
 	var base_angle := aim.angle()

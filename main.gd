@@ -29,6 +29,12 @@ func _ready() -> void:
 	# 一般客戶端模式：接上選單按鈕
 	%HostButton.pressed.connect(_on_host_pressed)
 	%JoinButton.pressed.connect(_on_join_pressed)
+	%SandboxButton.pressed.connect(_on_sandbox_pressed)
+
+	# --sandbox：直接進測試模式（_ready 期間不能換場景，延後一幀）
+	if Session.sandbox_mode:
+		_on_host_pressed.call_deferred()
+		return
 
 	# 客戶端的連線結果（一次性，換場景前有效）
 	NetworkManager.instance.connected_ok.connect(_on_connected)
@@ -46,6 +52,7 @@ func _parse_user_args() -> void:
 	var args: PackedStringArray = OS.get_cmdline_user_args()
 	wants_server = "--server" in args
 	Session.bot_mode = "--bot" in args
+	Session.sandbox_mode = "--sandbox" in args
 	var join_index: int = args.find("--join")
 	if join_index != -1 and join_index + 1 < args.size():
 		join_ip = args[join_index + 1]
@@ -76,6 +83,11 @@ func _on_host_pressed() -> void:
 		status_label.text = "開伺服器失敗：%s（port 被佔用？）" % error_string(err)
 		return
 	get_tree().change_scene_to_file("res://scenes/arena.tscn")
+
+
+func _on_sandbox_pressed() -> void:
+	Session.sandbox_mode = true
+	_on_host_pressed()
 
 
 func _on_join_pressed() -> void:

@@ -53,12 +53,15 @@ func execute(world: Node2D, caster_id: int, frame: InputFrame, tick: int) -> boo
 			if not is_in_sector(origin, aim, enemy.pos, RANGE, ARC_DEG):
 				continue
 			# 命中事件：道具可以改傷害、依觸發係數擲觸發（符文都掛這裡）
+			var coefficient := PROC_COEFFICIENT
+			if world.sandbox_proc_coefficient_override >= 0.0:
+				coefficient = world.sandbox_proc_coefficient_override   # 弓手節奏模擬
 			var hit_ctx := {
 				"world": world,
 				"attacker": caster_id,
 				"target": enemy_id,
 				"damage": DAMAGE * state.get("damage_mult", 1.0) * attack_ctx.damage_scale,
-				"proc_coefficient": PROC_COEFFICIENT,
+				"proc_coefficient": coefficient,
 				"proc_depth": 0,
 				"tick": tick,
 			}

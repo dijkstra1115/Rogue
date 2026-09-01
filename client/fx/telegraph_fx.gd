@@ -23,6 +23,10 @@ var world: Node2D = null
 var _flash_age: int = 0
 
 
+func _ready() -> void:
+	add_to_group("fx")   # 測試模式統計特效數量用
+
+
 func _draw() -> void:
 	var clock: float = world.telegraph_clock()
 	if clock < end_tick:

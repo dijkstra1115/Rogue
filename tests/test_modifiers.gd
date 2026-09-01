@@ -5,7 +5,7 @@
 extends SceneTree
 
 ## 預期執行的檢查總數（守門：腳本中途出錯時檢查數不足，不可誤判成全過）
-const EXPECTED_CHECKS := 10
+const EXPECTED_CHECKS := 12
 
 var failed_count: int = 0
 var check_count: int = 0
@@ -46,6 +46,7 @@ func _init() -> void:
 	_test_stack_merge()
 	_test_compute_stats()
 	_test_dispatch_priority()
+	_test_item_registry()
 
 	if check_count != EXPECTED_CHECKS:
 		print("FAIL: 只執行了 %d/%d 項檢查（腳本中途出錯？）" % [check_count, EXPECTED_CHECKS])
@@ -106,6 +107,16 @@ func _test_dispatch_priority() -> void:
 	var ctx2 := {"damage": 10.0}
 	stack2.dispatch_hit(ctx2)
 	_check(ctx2.damage == 30.0, "加入順序不影響結果")
+
+
+## 註冊表：能建立實例、堆疊數正確、磨刀石屬性生效
+func _test_item_registry() -> void:
+	var item := ItemRegistry.create("whetstone", 5)
+	_check(item.id == "whetstone" and item.stack_count == 5, "註冊表建立磨刀石 ×5")
+	var stack := ModifierStack.new()
+	stack.add(item)
+	var stats := stack.compute_stats({"damage_mult": 1.0})
+	_check(absf(stats.damage_mult - 1.6) < 0.001, "磨刀石 5 層 → 傷害 ×1.6")
 
 
 func _check(ok: bool, what: String) -> void:

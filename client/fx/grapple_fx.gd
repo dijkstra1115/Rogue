@@ -10,6 +10,10 @@ var to_pos: Vector2 = Vector2.ZERO
 var _age: int = 0
 
 
+func _ready() -> void:
+	add_to_group("fx")   # 測試模式統計特效數量用
+
+
 func _draw() -> void:
 	# 淺藍白色系——危險色（品紅/橘紅）保留給敵人
 	draw_line(from_pos, to_pos, Color(0.7, 0.85, 1.0, 0.8), 3.0)
